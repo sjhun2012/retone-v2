@@ -439,7 +439,7 @@ async fn ai_rewrite(Json(input): Json<RewriteRequest>) -> Json<serde_json::Value
         return Json(serde_json::json!({"suggestion":""}));
     }
     let Some(key) = env::var("OPENAI_API_KEY").ok() else {
-        return Json(serde_json::json!({"suggestion":""}));
+        return Json(serde_json::json!({"suggestion":"","error":"OPENAI_API_KEY_MISSING"}));
     };
     let prompt = format!(
         "다음 채팅을 뜻은 최대한 유지하면서 상대가 덜 공격적으로 들을 수 있는 자연스러운 한국어 한 문장으로 바꿔줘. 판정·설명·따옴표 없이 바꾼 문장만 출력. 원문: {text}"
@@ -464,7 +464,12 @@ async fn ai_rewrite(Json(input): Json<RewriteRequest>) -> Json<serde_json::Value
             .unwrap_or_default(),
         Err(_) => String::new(),
     };
-    Json(serde_json::json!({"suggestion":suggestion}))
+    let error = if suggestion.is_empty() {
+        "REWRITE_UNAVAILABLE"
+    } else {
+        ""
+    };
+    Json(serde_json::json!({"suggestion":suggestion,"error":error}))
 }
 async fn ai_support(Json(input): Json<RewriteRequest>) -> Json<serde_json::Value> {
     let text = input.text.trim();
