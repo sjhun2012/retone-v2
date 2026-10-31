@@ -49,7 +49,17 @@ struct Appointment {
     place: String,
 }
 #[derive(Clone)]
+struct DemoUser {
+    id: Uuid,
+    phone_hash: String,
+    name: String,
+    password_hash: String,
+    avatar_url: Option<String>,
+    ai_intervention: String,
+}
+#[derive(Clone)]
 struct Data {
+    users: Vec<DemoUser>,
     rooms: Vec<Room>,
     messages: Vec<Message>,
     agreements: Vec<Agreement>,
@@ -58,7 +68,7 @@ struct Data {
 #[derive(Clone)]
 struct App {
     data: Arc<RwLock<Data>>,
-    db: PgPool,
+    db: Option<PgPool>,
 }
 #[derive(Deserialize)]
 struct Send {
@@ -144,7 +154,7 @@ fn user_out(
 }
 
 async fn health() -> Json<serde_json::Value> {
-    let storage = prepare_storage().await.is_some();
+    let storage = env::var("DATABASE_URL").is_ok();
     Json(
         serde_json::json!({"ok":true,"runtime":"rust","storage":storage,"version":"v2-foundation"}),
     )
@@ -168,17 +178,31 @@ async fn signup(
         .to_string();
     let id = Uuid::new_v4();
     let level = ai_level(input.ai_intervention.as_deref());
-    let result=sqlx::query("INSERT INTO retone_v2.users(id,phone_hash,name,password_hash,is_admin,ai_intervention) VALUES($1,$2,$3,$4,$5,$6)").bind(id).bind(phone).bind(name).bind(hash).bind(input.phone=="12341234"&&name=="12341234").bind(&level).execute(&app.db).await;
-    if result.is_err() {
-        return Err(StatusCode::CONFLICT);
-    };
+    if let Some(db) = &app.db {
+        let result=sqlx::query("INSERT INTO retone_v2.users(id,phone_hash,name,password_hash,is_admin,ai_intervention) VALUES($1,$2,$3,$4,$5,$6)").bind(id).bind(&phone).bind(name).bind(&hash).bind(input.phone=="12341234"&&name=="12341234").bind(&level).execute(db).await;
+        if result.is_err() {
+            return Err(StatusCode::CONFLICT);
+        };
+    } else {
+        let mut data = app.data.write().await;
+        if data.users.iter().any(|user| user.phone_hash == phone) {
+            return Err(StatusCode::CONFLICT);
+        }
+        data.users.push(DemoUser { id, phone_hash: phone, name: name.to_string(), password_hash: hash, avatar_url: None, ai_intervention: level.clone() });
+    }
     Ok(Json(user_out(id, name.to_string(), None, level)))
 }
 async fn login(
     State(app): State<App>,
     Json(input): Json<Credentials>,
 ) -> Result<Json<PublicUser>, StatusCode> {
-    let row=sqlx::query_as::<_,(Uuid,String,Option<String>,String,String)>("SELECT id,name,avatar_url,password_hash,ai_intervention FROM retone_v2.users WHERE phone_hash=$1 AND name=$2 AND deleted_at IS NULL").bind(phone_hash(&input.phone)).bind(input.name.trim()).fetch_optional(&app.db).await.map_err(|_|StatusCode::INTERNAL_SERVER_ERROR)?.ok_or(StatusCode::UNAUTHORIZED)?;
+    let row = if let Some(db) = &app.db {
+        sqlx::query_as::<_,(Uuid,String,Option<String>,String,String)>("SELECT id,name,avatar_url,password_hash,ai_intervention FROM retone_v2.users WHERE phone_hash=$1 AND name=$2 AND deleted_at IS NULL").bind(phone_hash(&input.phone)).bind(input.name.trim()).fetch_optional(db).await.map_err(|_|StatusCode::INTERNAL_SERVER_ERROR)?.ok_or(StatusCode::UNAUTHORIZED)?
+    } else {
+        let data = app.data.read().await;
+        let user = data.users.iter().find(|user| user.phone_hash == phone_hash(&input.phone) && user.name == input.name.trim()).ok_or(StatusCode::UNAUTHORIZED)?;
+        (user.id, user.name.clone(), user.avatar_url.clone(), user.password_hash.clone(), user.ai_intervention.clone())
+    };
     let parsed = PasswordHash::new(&row.3).map_err(|_| StatusCode::UNAUTHORIZED)?;
     Argon2::default()
         .verify_password(input.password.as_bytes(), &parsed)
@@ -186,7 +210,12 @@ async fn login(
     Ok(Json(user_out(row.0, row.1, row.2, row.4)))
 }
 async fn users(State(app): State<App>) -> Result<Json<Vec<PublicUser>>, StatusCode> {
-    let rows=sqlx::query_as::<_,(Uuid,String,Option<String>,String)>("SELECT id,name,avatar_url,ai_intervention FROM retone_v2.users WHERE deleted_at IS NULL ORDER BY created_at").fetch_all(&app.db).await.map_err(|_|StatusCode::INTERNAL_SERVER_ERROR)?;
+    let rows = if let Some(db) = &app.db {
+        sqlx::query_as::<_,(Uuid,String,Option<String>,String)>("SELECT id,name,avatar_url,ai_intervention FROM retone_v2.users WHERE deleted_at IS NULL ORDER BY created_at").fetch_all(db).await.map_err(|_|StatusCode::INTERNAL_SERVER_ERROR)?
+    } else {
+        let data = app.data.read().await;
+        data.users.iter().map(|user| (user.id, user.name.clone(), user.avatar_url.clone(), user.ai_intervention.clone())).collect()
+    };
     Ok(Json(
         rows.into_iter()
             .map(|r| user_out(r.0, r.1, r.2, r.3))
@@ -199,7 +228,14 @@ async fn update_preferences(
     Json(input): Json<Preferences>,
 ) -> Result<Json<PublicUser>, StatusCode> {
     let level = ai_level(Some(&input.ai_intervention));
-    let row=sqlx::query_as::<_,(Uuid,String,Option<String>,String)>("UPDATE retone_v2.users SET ai_intervention=$1 WHERE id=$2 AND deleted_at IS NULL RETURNING id,name,avatar_url,ai_intervention").bind(&level).bind(id).fetch_optional(&app.db).await.map_err(|_|StatusCode::INTERNAL_SERVER_ERROR)?.ok_or(StatusCode::NOT_FOUND)?;
+    let row = if let Some(db) = &app.db {
+        sqlx::query_as::<_,(Uuid,String,Option<String>,String)>("UPDATE retone_v2.users SET ai_intervention=$1 WHERE id=$2 AND deleted_at IS NULL RETURNING id,name,avatar_url,ai_intervention").bind(&level).bind(id).fetch_optional(db).await.map_err(|_|StatusCode::INTERNAL_SERVER_ERROR)?.ok_or(StatusCode::NOT_FOUND)?
+    } else {
+        let mut data = app.data.write().await;
+        let user = data.users.iter_mut().find(|user| user.id == id).ok_or(StatusCode::NOT_FOUND)?;
+        user.ai_intervention = level.clone();
+        (user.id, user.name.clone(), user.avatar_url.clone(), user.ai_intervention.clone())
+    };
     Ok(Json(user_out(row.0, row.1, row.2, row.3)))
 }
 async fn ai_check(State(app): State<App>, Json(input): Json<AiCheck>) -> Json<serde_json::Value> {
@@ -348,7 +384,9 @@ async fn ai_check(State(app): State<App>, Json(input): Json<AiCheck>) -> Json<se
         "{:x}",
         Sha256::digest(format!("v2:{level}:{normalized}").as_bytes())
     );
-    if let Ok(Some((verdict,suggestion,info_level,info_note,info_queries)))=sqlx::query_as::<_,(String,Option<String>,String,Option<String>,Vec<String>)>("SELECT verdict,suggestion,info_level,info_note,info_queries FROM retone_v2.ai_cache WHERE message_hash=$1").bind(&hash).fetch_optional(&app.db).await{return Json(serde_json::json!({"verdict":verdict,"suggestion":suggestion,"info":{"level":info_level,"note":info_note,"queries":info_queries},"source":"cache"}));}
+    if let Some(db) = &app.db {
+        if let Ok(Some((verdict,suggestion,info_level,info_note,info_queries)))=sqlx::query_as::<_,(String,Option<String>,String,Option<String>,Vec<String>)>("SELECT verdict,suggestion,info_level,info_note,info_queries FROM retone_v2.ai_cache WHERE message_hash=$1").bind(&hash).fetch_optional(db).await{return Json(serde_json::json!({"verdict":verdict,"suggestion":suggestion,"info":{"level":info_level,"note":info_note,"queries":info_queries},"source":"cache"}));}
+    }
     let Some(key) = env::var("OPENAI_API_KEY").ok() else {
         return Json(
             serde_json::json!({"verdict":"PASS","suggestion":null,"info":{"level":"none","note":null,"queries":[]},"source":"unavailable"}),
@@ -388,7 +426,9 @@ async fn ai_check(State(app): State<App>, Json(input): Json<AiCheck>) -> Json<se
                 .collect::<Vec<_>>()
         })
         .unwrap_or_default();
-    let _=sqlx::query("INSERT INTO retone_v2.ai_cache(message_hash,verdict,suggestion,info_level,info_note,info_queries) VALUES($1,$2,$3,$4,$5,$6) ON CONFLICT(message_hash) DO UPDATE SET verdict=EXCLUDED.verdict,suggestion=EXCLUDED.suggestion,info_level=EXCLUDED.info_level,info_note=EXCLUDED.info_note,info_queries=EXCLUDED.info_queries,checked_at=NOW()").bind(&hash).bind(verdict).bind(suggestion).bind(info_level).bind(info_note).bind(&info_queries).execute(&app.db).await;
+    if let Some(db) = &app.db {
+        let _=sqlx::query("INSERT INTO retone_v2.ai_cache(message_hash,verdict,suggestion,info_level,info_note,info_queries) VALUES($1,$2,$3,$4,$5,$6) ON CONFLICT(message_hash) DO UPDATE SET verdict=EXCLUDED.verdict,suggestion=EXCLUDED.suggestion,info_level=EXCLUDED.info_level,info_note=EXCLUDED.info_note,info_queries=EXCLUDED.info_queries,checked_at=NOW()").bind(&hash).bind(verdict).bind(suggestion).bind(info_level).bind(info_note).bind(&info_queries).execute(db).await;
+    }
     Json(
         serde_json::json!({"verdict":verdict,"suggestion":suggestion,"info":{"level":info_level,"note":info_note,"queries":info_queries},"source":"ai"}),
     )
@@ -462,7 +502,9 @@ async fn report_ai(
     if input.reporter_name.trim().is_empty() || input.original_text.trim().is_empty() {
         return Err(StatusCode::BAD_REQUEST);
     };
-    sqlx::query("INSERT INTO retone_v2.ai_reports(id,reporter_name,original_text,ai_result) VALUES($1,$2,$3,$4)").bind(Uuid::new_v4()).bind(input.reporter_name.trim()).bind(input.original_text.trim()).bind(input.ai_result).execute(&app.db).await.map_err(|_|StatusCode::INTERNAL_SERVER_ERROR)?;
+    if let Some(db) = &app.db {
+        sqlx::query("INSERT INTO retone_v2.ai_reports(id,reporter_name,original_text,ai_result) VALUES($1,$2,$3,$4)").bind(Uuid::new_v4()).bind(input.reporter_name.trim()).bind(input.original_text.trim()).bind(input.ai_result).execute(db).await.map_err(|_|StatusCode::INTERNAL_SERVER_ERROR)?;
+    }
     Ok(Json(serde_json::json!({"ok":true})))
 }
 async fn bootstrap(State(app): State<App>) -> Json<DataOut> {
@@ -611,10 +653,11 @@ async fn prepare_storage() -> Option<PgPool> {
 
 #[tokio::main]
 async fn main() {
-    let db = prepare_storage().await.expect("DATABASE_URL is required");
+    let db = prepare_storage().await;
     let app_state = App {
         db,
         data: Arc::new(RwLock::new(Data {
+            users: vec![],
             rooms: vec![],
             messages: vec![],
             agreements: vec![],
