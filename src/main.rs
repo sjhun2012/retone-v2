@@ -25,6 +25,7 @@ struct Room {
     pinned: bool,
     last: String,
     updated: i64,
+    participant_names: Vec<String>,
 }
 #[derive(Clone, Serialize)]
 struct Message {
@@ -78,6 +79,11 @@ struct Send {
 #[derive(Deserialize)]
 struct NewRoom {
     name: String,
+    members: Option<Vec<String>>,
+}
+#[derive(Deserialize)]
+struct InviteMembers {
+    members: Vec<String>,
 }
 #[derive(Deserialize)]
 struct NewAgreement {
@@ -237,6 +243,20 @@ async fn update_preferences(
         (user.id, user.name.clone(), user.avatar_url.clone(), user.ai_intervention.clone())
     };
     Ok(Json(user_out(row.0, row.1, row.2, row.3)))
+}
+async fn delete_account(State(app): State<App>, Path(id): Path<Uuid>) -> StatusCode {
+    if let Some(db) = &app.db {
+        match sqlx::query("UPDATE retone_v2.users SET deleted_at=NOW() WHERE id=$1 AND deleted_at IS NULL").bind(id).execute(db).await {
+            Ok(result) if result.rows_affected() == 1 => StatusCode::NO_CONTENT,
+            Ok(_) => StatusCode::NOT_FOUND,
+            Err(_) => StatusCode::INTERNAL_SERVER_ERROR,
+        }
+    } else {
+        let mut data = app.data.write().await;
+        let before = data.users.len();
+        data.users.retain(|user| user.id != id);
+        if data.users.len() < before { StatusCode::NO_CONTENT } else { StatusCode::NOT_FOUND }
+    }
 }
 async fn ai_check(State(app): State<App>, Json(input): Json<AiCheck>) -> Json<serde_json::Value> {
     let text = input.text.trim();
@@ -442,7 +462,7 @@ async fn ai_rewrite(Json(input): Json<RewriteRequest>) -> Json<serde_json::Value
         return Json(serde_json::json!({"suggestion":"","error":"OPENAI_API_KEY_MISSING"}));
     };
     let prompt = format!(
-        "다음 채팅을 뜻은 최대한 유지하면서 상대가 덜 공격적으로 들을 수 있는 자연스러운 한국어 한 문장으로 바꿔줘. 판정·설명·따옴표 없이 바꾼 문장만 출력. 원문: {text}"
+        "다음 채팅을 뜻은 최대한 유지하면서 상대가 덜 공격적으로 들릴 자연스러운 한국어 한 문장으로 바꿔줘. 판정·설명·따옴표 없이 바꾼 문장만 출력. 욕설·인신공격은 완곡한 욕설로 바꾸지 말고, 화난 감정과 상대에게 바라는 행동을 분명히 말해라. 예를 들어 '야 이 씨발놈아'처럼 맥락 없는 모욕은 '지금 너무 화가 나. 그렇게 말하지 말아줘.'처럼 바꾼다. 원문에 없는 사실·상황·실망의 이유를 지어내지 마라. 원문: {text}"
     );
     let response = reqwest::Client::new()
         .post("https://api.openai.com/v1/responses")
@@ -552,7 +572,7 @@ async fn send(
         mine: true,
         body: input.body.trim().to_string(),
         created: Utc::now().timestamp_millis(),
-        unread: 2,
+        unread: 0,
     };
     d.messages.push(message.clone());
     if let Some(room) = d.rooms.iter_mut().find(|r| r.id == id) {
@@ -583,17 +603,41 @@ async fn create_room(
     if name.is_empty() {
         return Err(StatusCode::BAD_REQUEST);
     }
+    let mut participant_names = Vec::new();
+    for member in input.members.unwrap_or_default() {
+        let member = member.trim().chars().take(24).collect::<String>();
+        if !member.is_empty() && !participant_names.contains(&member) {
+            participant_names.push(member);
+        }
+    }
     let room = Room {
         id: Uuid::new_v4().to_string(),
         name: name.chars().take(30).collect(),
-        members: 1,
+        members: (participant_names.len() + 1).min(u8::MAX as usize) as u8,
         unread: 0,
         pinned: false,
         last: "새 대화를 시작해 보세요.".into(),
         updated: Utc::now().timestamp_millis(),
+        participant_names,
     };
     app.data.write().await.rooms.push(room.clone());
     Ok(Json(room))
+}
+async fn invite_members(
+    State(app): State<App>,
+    Path(id): Path<String>,
+    Json(input): Json<InviteMembers>,
+) -> Result<Json<Room>, StatusCode> {
+    let mut data = app.data.write().await;
+    let room = data.rooms.iter_mut().find(|room| room.id == id).ok_or(StatusCode::NOT_FOUND)?;
+    for member in input.members {
+        let member = member.trim().chars().take(24).collect::<String>();
+        if !member.is_empty() && !room.participant_names.contains(&member) {
+            room.participant_names.push(member);
+        }
+    }
+    room.members = (room.participant_names.len() + 1).min(u8::MAX as usize) as u8;
+    Ok(Json(room.clone()))
 }
 async fn create_agreement(
     State(app): State<App>,
@@ -675,12 +719,14 @@ async fn main() {
         .route("/api/auth/login", post(login))
         .route("/api/users", get(users))
         .route("/api/users/{id}/preferences", patch(update_preferences))
+        .route("/api/users/{id}", delete(delete_account))
         .route("/api/ai/check", post(ai_check))
         .route("/api/ai/rewrite", post(ai_rewrite))
         .route("/api/ai/support", post(ai_support))
         .route("/api/ai/reports", post(report_ai))
         .route("/api/bootstrap", get(bootstrap))
         .route("/api/rooms", post(create_room))
+        .route("/api/rooms/{id}/members", post(invite_members))
         .route("/api/agreements", post(create_agreement))
         .route("/api/appointments", post(create_appointment))
         .route("/api/rooms/{id}/messages", get(messages).post(send))
