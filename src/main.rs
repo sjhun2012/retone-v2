@@ -37,6 +37,7 @@ struct Message {
     body: String,
     created: i64,
     unread: u8,
+    read_by: Vec<String>,
 }
 #[derive(Clone, Serialize)]
 struct Agreement {
@@ -46,9 +47,11 @@ struct Agreement {
 }
 #[derive(Clone, Serialize)]
 struct Appointment {
+    id: String,
     title: String,
     date: String,
     place: String,
+    creator: String,
 }
 #[derive(Clone)]
 struct DemoUser {
@@ -88,6 +91,10 @@ struct InviteMembers {
     members: Vec<String>,
 }
 #[derive(Deserialize)]
+struct ReadMessages {
+    reader: String,
+}
+#[derive(Deserialize)]
 struct NewAgreement {
     task: String,
     assignee: String,
@@ -98,6 +105,7 @@ struct NewAppointment {
     title: String,
     date: String,
     place: String,
+    creator: Option<String>,
 }
 #[derive(Deserialize)]
 struct Credentials {
@@ -110,10 +118,12 @@ struct Credentials {
 struct AiCheck {
     text: String,
     ai_intervention: Option<String>,
+    context: Option<Vec<String>>,
 }
 #[derive(Deserialize)]
 struct RewriteRequest {
     text: String,
+    context: Option<Vec<String>>,
 }
 #[derive(Deserialize)]
 struct AiReport {
@@ -268,6 +278,15 @@ async fn ai_check(State(app): State<App>, Json(input): Json<AiCheck>) -> Json<se
         .filter(|c| !c.is_whitespace() && !c.is_ascii_punctuation())
         .collect::<String>();
     let level = ai_level(input.ai_intervention.as_deref());
+    let context = input
+        .context
+        .as_deref()
+        .unwrap_or(&[])
+        .iter()
+        .take(6)
+        .cloned()
+        .collect::<Vec<_>>()
+        .join("\n");
     let pass = [
         "ㅋㅋ",
         "ㅋㅋㅋ",
@@ -415,7 +434,7 @@ async fn ai_check(State(app): State<App>, Json(input): Json<AiCheck>) -> Json<se
         );
     };
     let prompt = format!(
-        "너는 Re:Tone의 대화 거울이다. 판정자·검열자·사실확인 기관이 아니다. 현재 문장을 오직 '이렇게 들릴 수도 있어요'라는 제안으로만 비춘다.\n1) 심한 욕설·위협·명백한 조롱뿐 아니라, 비꼼·냉소·돌려 말하는 압박·상대를 작게 만드는 표현도 알아차린다. 친한 사이의 가벼운 농담은 WARN하지 않는다.\n2) WARN일 때 suggestion은 반드시 이 문장에 맞춰 두 문장으로 쓴다. 첫 문장은 실제 문제 지점(단어·어조·비꼼)을 따옴표로 구체적으로 짚고 왜 상대가 압박·비난·조롱으로 느낄 수 있는지 설명한다. 둘째 문장은 원래 의도를 살린 짧은 대체 표현을 제안한다. 일반적인 반복 문구를 쓰지 마라. 단, 위반·나쁨·부적절함이라고 판정하지 말고 가능성 표현만 쓴다.\n3) 정보 점검: 건강·안전·법·돈·정치·재난·통계·속보성 주장에 출처·날짜·원문이 빠졌다면 info.level=check. 진실·거짓을 판단하지 말고 출처와 날짜 확인을 제안한다.\n4) 현재 개입 강도는 {level}이다. standard는 뚜렷한 경우만, careful은 비꼼·오해 가능성까지 조금 더 꼼꼼히 본다.\n5) JSON만 출력: {{\"verdict\":\"PASS|WARN\",\"suggestion\":string|null,\"info\":{{\"level\":\"none|check\",\"note\":string|null,\"queries\":[string]}}}}. queries는 확인할 검색어 0~2개.\n문장: {text}"
+        "너는 Re:Tone의 대화 거울이다. 판정자·검열자·사실확인 기관이 아니다. 현재 문장을 오직 '이렇게 들릴 수도 있어요'라는 제안으로만 비춘다.\n1) 심한 욕설·위협·명백한 조롱뿐 아니라, 비꼼·냉소·돌려 말하는 압박·상대를 작게 만드는 표현도 알아차린다. 친한 사이의 가벼운 농담은 WARN하지 않는다.\n2) WARN일 때 suggestion은 반드시 이 문장에 맞춰 두 문장으로 쓴다. 첫 문장은 실제 문제 지점(단어·어조·비꼼)을 따옴표로 구체적으로 짚고 왜 상대가 압박·비난·조롱으로 느낄 수 있는지 설명한다. 둘째 문장은 원래 의도를 살린 짧은 대체 표현을 제안한다. 최근 대화 맥락이 있다면 갈등의 원인과 사용자의 바람을 살리되, 맥락에 없는 사실을 만들지 마라.\n3) 정보 점검: 건강·안전·법·돈·정치·재난·통계·속보성 주장에 출처·날짜·원문이 빠졌다면 info.level=check. 진실·거짓을 판단하지 말고 출처와 날짜 확인을 제안한다.\n4) 현재 개입 강도는 {level}이다. standard는 뚜렷한 경우만, careful은 비꼼·오해 가능성까지 조금 더 꼼꼼히 본다.\n5) JSON만 출력: {{\"verdict\":\"PASS|WARN\",\"suggestion\":string|null,\"info\":{{\"level\":\"none|check\",\"note\":string|null,\"queries\":[string]}}}}. queries는 확인할 검색어 0~2개.\n최근 대화(없으면 무시):\n{context}\n문장: {text}"
     );
     let res = reqwest::Client::new()
         .post("https://api.openai.com/v1/responses")
@@ -460,6 +479,15 @@ async fn ai_rewrite(Json(input): Json<RewriteRequest>) -> Json<serde_json::Value
     if text.is_empty() {
         return Json(serde_json::json!({"suggestion":""}));
     }
+    let context = input
+        .context
+        .as_deref()
+        .unwrap_or(&[])
+        .iter()
+        .take(6)
+        .cloned()
+        .collect::<Vec<_>>()
+        .join("\n");
     // Common short insults should feel immediate and natural. They do not need
     // an external model call, which also avoids rewriting them word-by-word.
     let compact = text
@@ -482,7 +510,7 @@ async fn ai_rewrite(Json(input): Json<RewriteRequest>) -> Json<serde_json::Value
         return Json(serde_json::json!({"suggestion":"","error":"OPENAI_API_KEY_MISSING"}));
     };
     let prompt = format!(
-        "다음 채팅을 뜻은 최대한 유지하면서 상대가 덜 공격적으로 들릴 자연스러운 한국어로 바꿔줘. 판정·설명·따옴표 없이 바꾼 문장만 출력. 욕설·인신공격은 완곡한 욕설로 바꾸지 말고, 문장 전체의 요청·질문·상황은 살린 채 화난 감정과 상대에게 바라는 행동을 분명히 말해라. 단어 하나만 바꾸거나 원문에 없는 실망의 이유·상황을 지어내지 마라. 맥락 없는 모욕은 자연스러운 I-메시지로: '야 이 씨발놈아'→'지금 정말 화가 났어. 그렇게 말하지 말아줘.', '풉 바보'→'그 말은 듣기 싫어. 서로 존중해서 이야기하자.'처럼 쓴다. 원문: {text}"
+        "다음 채팅을 뜻은 최대한 유지하면서 상대가 덜 공격적으로 들릴 자연스러운 한국어로 바꿔줘. 판정·설명·따옴표 없이 바꾼 문장만 출력. 욕설·인신공격은 완곡한 욕설로 바꾸지 말고, 문장 전체의 요청·질문·상황은 살린 채 화난 감정과 상대에게 바라는 행동을 분명히 말해라. 최근 대화의 갈등 원인이 드러난 경우에는 '네가 ~해서 내가 속상했어. 앞으로 ~해주면 좋겠어.'처럼 I-메시지로 바꾸되, 원문과 맥락에 없는 사실을 지어내지 마라. 단어 하나만 바꾸지 마라. 맥락 없는 모욕은 자연스러운 I-메시지로: '야 이 씨발놈아'→'지금 정말 화가 났어. 그렇게 말하지 말아줘.', '풉 바보'→'그 말은 듣기 싫어. 서로 존중해서 이야기하자.'처럼 쓴다. 최근 대화(없으면 무시):\n{context}\n원문: {text}"
     );
     let response = reqwest::Client::new()
         .post("https://api.openai.com/v1/responses")
@@ -586,17 +614,24 @@ async fn send(
         return Err(StatusCode::BAD_REQUEST);
     }
     let mut d = app.data.write().await;
+    let unread = d
+        .rooms
+        .iter()
+        .find(|room| room.id == id)
+        .map(|room| room.members.saturating_sub(1))
+        .unwrap_or(0);
     let message = Message {
         id: Uuid::new_v4().to_string(),
         room_id: id.clone(),
-        sender,
+        sender: sender.clone(),
         // A message is not intrinsically "mine": that depends on the person
         // currently looking at it. The browser compares the sender to its
         // signed-in user, so A's message is shown as incoming for B.
         mine: false,
         body: input.body.trim().to_string(),
         created: Utc::now().timestamp_millis(),
-        unread: 0,
+        unread,
+        read_by: vec![sender],
     };
     d.messages.push(message.clone());
     if let Some(room) = d.rooms.iter_mut().find(|r| r.id == id) {
@@ -612,12 +647,30 @@ async fn delete_message(
     let mut d = app.data.write().await;
     let before = d.messages.len();
     d.messages
-        .retain(|m| !(m.room_id == room_id && m.id == message_id && m.mine));
+        .retain(|m| !(m.room_id == room_id && m.id == message_id));
     if d.messages.len() < before {
         StatusCode::NO_CONTENT
     } else {
         StatusCode::NOT_FOUND
     }
+}
+async fn mark_messages_read(
+    State(app): State<App>,
+    Path(id): Path<String>,
+    Json(input): Json<ReadMessages>,
+) -> StatusCode {
+    let reader = input.reader.trim();
+    if reader.is_empty() {
+        return StatusCode::BAD_REQUEST;
+    }
+    let mut data = app.data.write().await;
+    for message in data.messages.iter_mut().filter(|message| message.room_id == id) {
+        if message.sender != reader && !message.read_by.iter().any(|name| name == reader) {
+            message.read_by.push(reader.to_string());
+            message.unread = message.unread.saturating_sub(1);
+        }
+    }
+    StatusCode::NO_CONTENT
 }
 async fn create_room(
     State(app): State<App>,
@@ -711,6 +764,7 @@ async fn create_appointment(
         return Err(StatusCode::BAD_REQUEST);
     }
     let appointment = Appointment {
+        id: Uuid::new_v4().to_string(),
         title: input.title.trim().chars().take(80).collect(),
         date: input.date.trim().chars().take(30).collect(),
         place: if input.place.trim().is_empty() {
@@ -718,6 +772,14 @@ async fn create_appointment(
         } else {
             input.place.trim().chars().take(50).collect()
         },
+        creator: input
+            .creator
+            .as_deref()
+            .unwrap_or("")
+            .trim()
+            .chars()
+            .take(24)
+            .collect(),
     };
     app.data
         .write()
@@ -771,6 +833,7 @@ async fn main() {
         .route("/api/agreements", post(create_agreement))
         .route("/api/appointments", post(create_appointment))
         .route("/api/rooms/{id}/messages", get(messages).post(send))
+        .route("/api/rooms/{id}/read", post(mark_messages_read))
         .route(
             "/api/rooms/{room_id}/messages/{message_id}",
             delete(delete_message),
