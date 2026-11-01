@@ -553,6 +553,20 @@ async fn ai_rewrite(Json(input): Json<RewriteRequest>) -> Json<serde_json::Value
         .chars()
         .filter(|c| !c.is_whitespace() && !c.is_ascii_punctuation())
         .collect::<String>();
+    let context_compact = context
+        .chars()
+        .filter(|c| !c.is_whitespace() && !c.is_ascii_punctuation())
+        .collect::<String>();
+    let dismissive_reply = ["알빠야", "내알바야", "니상관아니야", "네상관아니야"]
+        .iter()
+        .any(|phrase| compact.contains(phrase));
+    let lateness_complaint = context.contains("[상대]")
+        && ["왜안와", "왜안왔", "늦었", "늦어", "기다렸", "약속시간"]
+            .iter()
+            .any(|phrase| context_compact.contains(phrase));
+    if dismissive_reply && lateness_complaint {
+        return Json(serde_json::json!({"suggestion":"늦어서 미안해. 다음에는 미리 연락할게.","error":""}));
+    }
     let quick = if compact == "야이나쁜놈아" {
         Some("지금 정말 화가 났어. 그렇게 하지 말아줘.")
     } else if compact == "야이씨발놈아" {
