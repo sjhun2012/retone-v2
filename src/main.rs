@@ -620,6 +620,15 @@ async fn ai_schedule(Json(input): Json<ScheduleCheck>) -> Json<serde_json::Value
         .chars()
         .filter(|c| !c.is_whitespace() && !c.is_ascii_punctuation())
         .collect::<String>();
+    // A confirmation is a reply to an existing suggestion, not a new schedule.
+    // Keep this deterministic so the model cannot reopen a schedule proposal on
+    // the other participant's screen just because the earlier context mentions a plan.
+    let acknowledgement = ["ㅇㅋ", "ㅇㅇ", "응", "그래", "알겠어", "알았다", "좋아", "오케이", "okay", "ok", "넵", "네"]
+        .iter()
+        .any(|phrase| compact == *phrase);
+    if acknowledgement {
+        return Json(serde_json::json!({"is_schedule":false}));
+    }
     let arrival_chase = ["왜안와", "왜안왔", "빨리와", "어서와", "언제와", "지금와"]
         .iter()
         .any(|phrase| compact.contains(phrase));
