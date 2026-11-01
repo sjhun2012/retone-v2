@@ -329,6 +329,13 @@ async function deleteOwnSchedule(id){
     renderRoomScheduleNotice();updateScheduleUi();
   }catch{alert('일정을 삭제하지 못했어요. 내가 만든 일정인지 확인해 주세요.')}
 }
+async function saveAppointment(){
+  const title=document.querySelector('#appointmentTitle')?.value.trim(),date=document.querySelector('#appointmentDate')?.value;
+  if(!title||!date)return alert('일정 이름과 시간을 입력해 주세요.');
+  await api('/api/appointments',{method:'POST',body:JSON.stringify({title,date:date.replace('T',' '),place:document.querySelector('#appointmentPlace')?.value||'',creator:signedIn,room_id:roomId||null})});
+  data=await api('/api/bootstrap');closePopup();
+  if(roomId)await openRoom(roomId);else await home();
+}
 function scheduleCard(appointment,chat=false){
   const own=appointment.creator===signedIn;
   return `<article class="schedule-item ${chat?'chat-schedule-card':''}" data-schedule-id="${appointment.id}"><button class="schedule-cancel" title="내 화면에서 숨기기" onclick="hideScheduleCard('${appointment.id}')">×</button>${own?`<button class="schedule-delete-global" title="모두에게서 일정 삭제" onclick="deleteOwnSchedule('${appointment.id}')">삭제</button>`:''}<button class="schedule-edit" onclick="editAppointment('${appointment.id}')"><strong>${esc(appointment.title||'일정')}</strong>${(appointment.fields||[]).map(field=>`<span class="schedule-field"><b>${esc(field.label)}</b><i>${esc(field.value)||'비어 있음'}</i></span>`).join('')}</button></article>`;
