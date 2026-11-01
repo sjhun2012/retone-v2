@@ -26,6 +26,7 @@ struct Room {
     last: String,
     updated: i64,
     participant_names: Vec<String>,
+    direct_key: Option<String>,
 }
 #[derive(Clone, Serialize)]
 struct Message {
@@ -80,6 +81,7 @@ struct Send {
 struct NewRoom {
     name: String,
     members: Option<Vec<String>>,
+    direct_key: Option<String>,
 }
 #[derive(Deserialize)]
 struct InviteMembers {
@@ -458,11 +460,29 @@ async fn ai_rewrite(Json(input): Json<RewriteRequest>) -> Json<serde_json::Value
     if text.is_empty() {
         return Json(serde_json::json!({"suggestion":""}));
     }
+    // Common short insults should feel immediate and natural. They do not need
+    // an external model call, which also avoids rewriting them word-by-word.
+    let compact = text
+        .chars()
+        .filter(|c| !c.is_whitespace() && !c.is_ascii_punctuation())
+        .collect::<String>();
+    let quick = if compact == "야이나쁜놈아" {
+        Some("지금 정말 화가 났어. 그렇게 하지 말아줘.")
+    } else if compact == "야이씨발놈아" {
+        Some("지금 정말 화가 났어. 그렇게 말하지 말아줘.")
+    } else if compact == "풉바보" {
+        Some("그 말은 듣기 싫어. 서로 존중해서 이야기하자.")
+    } else {
+        None
+    };
+    if let Some(suggestion) = quick {
+        return Json(serde_json::json!({"suggestion":suggestion,"error":""}));
+    }
     let Some(key) = env::var("OPENAI_API_KEY").ok() else {
         return Json(serde_json::json!({"suggestion":"","error":"OPENAI_API_KEY_MISSING"}));
     };
     let prompt = format!(
-        "다음 채팅을 뜻은 최대한 유지하면서 상대가 덜 공격적으로 들릴 자연스러운 한국어 한 문장으로 바꿔줘. 판정·설명·따옴표 없이 바꾼 문장만 출력. 욕설·인신공격은 완곡한 욕설로 바꾸지 말고, 화난 감정과 상대에게 바라는 행동을 분명히 말해라. 예를 들어 '야 이 씨발놈아'처럼 맥락 없는 모욕은 '지금 너무 화가 나. 그렇게 말하지 말아줘.'처럼 바꾼다. 원문에 없는 사실·상황·실망의 이유를 지어내지 마라. 원문: {text}"
+        "다음 채팅을 뜻은 최대한 유지하면서 상대가 덜 공격적으로 들릴 자연스러운 한국어로 바꿔줘. 판정·설명·따옴표 없이 바꾼 문장만 출력. 욕설·인신공격은 완곡한 욕설로 바꾸지 말고, 문장 전체의 요청·질문·상황은 살린 채 화난 감정과 상대에게 바라는 행동을 분명히 말해라. 단어 하나만 바꾸거나 원문에 없는 실망의 이유·상황을 지어내지 마라. 맥락 없는 모욕은 자연스러운 I-메시지로: '야 이 씨발놈아'→'지금 정말 화가 났어. 그렇게 말하지 말아줘.', '풉 바보'→'그 말은 듣기 싫어. 서로 존중해서 이야기하자.'처럼 쓴다. 원문: {text}"
     );
     let response = reqwest::Client::new()
         .post("https://api.openai.com/v1/responses")
@@ -607,11 +627,27 @@ async fn create_room(
     if name.is_empty() {
         return Err(StatusCode::BAD_REQUEST);
     }
+    let direct_key = input
+        .direct_key
+        .as_deref()
+        .map(str::trim)
+        .filter(|key| !key.is_empty())
+        .map(|key| key.chars().take(100).collect::<String>());
     let mut participant_names = Vec::new();
     for member in input.members.unwrap_or_default() {
         let member = member.trim().chars().take(24).collect::<String>();
         if !member.is_empty() && !participant_names.contains(&member) {
             participant_names.push(member);
+        }
+    }
+    let mut data = app.data.write().await;
+    if let Some(key) = &direct_key {
+        if let Some(room) = data
+            .rooms
+            .iter()
+            .find(|room| room.direct_key.as_ref() == Some(key))
+        {
+            return Ok(Json(room.clone()));
         }
     }
     let room = Room {
@@ -623,8 +659,9 @@ async fn create_room(
         last: "새 대화를 시작해 보세요.".into(),
         updated: Utc::now().timestamp_millis(),
         participant_names,
+        direct_key,
     };
-    app.data.write().await.rooms.push(room.clone());
+    data.rooms.push(room.clone());
     Ok(Json(room))
 }
 async fn invite_members(
