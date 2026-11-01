@@ -434,6 +434,7 @@ async fn ai_check(State(app): State<App>, Json(input): Json<AiCheck>) -> Json<se
         "개새끼",
         "개새",
         "병신",
+        "븅신",
         "ㅂㅅ",
         "ㅄ",
         "좆",
