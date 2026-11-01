@@ -571,7 +571,7 @@ async fn ai_rewrite(Json(input): Json<RewriteRequest>) -> Json<serde_json::Value
         return Json(serde_json::json!({"suggestion":"","error":"OPENAI_API_KEY_MISSING"}));
     };
     let prompt = format!(
-        "다음 채팅을 뜻은 최대한 유지하면서 상대가 덜 공격적으로 들릴 자연스러운 한국어로 바꿔줘. 판정·설명·따옴표 없이 바꾼 문장만 출력.\n중요: 원문은 반드시 '{sender}'가 작성했다. 최근 대화의 각 줄은 실제 화자 이름을 가진 기록이다. 원문에 있는 욕설은 '{sender}'가 한 말이므로, 그것만 근거로 상대가 욕하거나 잘못했다고 쓰지 마라. 상대가 한 구체 행동은 최근 대화에 상대 이름으로 명시된 경우에만 언급할 수 있다. 사실이 없으면 '네가 그렇게 욕해서'처럼 상대의 행동을 지어내지 말고, '{sender}' 자신의 감정과 앞으로의 대화 방식을 말해라.\n욕설·인신공격은 완곡한 욕설로 바꾸지 말고, 문장 전체의 요청·질문·상황은 살린 채 화난 감정과 상대에게 바라는 행동을 분명히 말해라. 상대의 구체 행동이 기록되어 있으면 두 문장 I-메시지로 써라. 원인이 없을 때는 예를 들어 '지금 너무 화가 났어. 서로 기분 상하게 말하지 말고 이야기하자.'처럼 자연스럽게 써라. 단어 하나만 바꾸지 마라.\n최근 대화(없으면 무시):\n{context}\n원문({sender} 작성): {text}"
+        "다음 채팅을 뜻은 최대한 유지하면서 상대가 덜 공격적으로 들릴 자연스러운 한국어로 바꿔줘. 판정·설명·따옴표 없이 바꾼 문장만 출력.\n중요: 원문은 반드시 '{sender}'가 작성했다. 최근 대화에는 오직 '{sender}'가 이전에 작성한 문장만 제공된다. 다른 사람이 느낀 감정, 다른 사람이 한 불만, 또는 상대가 해야 할 사과를 '{sender}'의 말처럼 가져오지 마라. 즉 다른 사람이 '왜 안 와?'라고 말했다고 해서 '{sender}'에게 '내가 기대했는데 네가 늦어서 속상해'라고 쓰게 하면 안 된다. 원문에 있는 욕설도 '{sender}'가 한 말이므로, 그것만 근거로 상대가 욕하거나 잘못했다고 쓰지 마라. 사실이 부족하면 상대 행동을 지어내지 말고 '{sender}'의 현재 감정과 앞으로의 대화 방식을 중립적으로 말해라.\n욕설·인신공격은 완곡한 욕설로 바꾸지 말고, 문장 전체의 요청·질문·상황은 살린 채 화난 감정과 상대에게 바라는 행동을 분명히 말해라. 원인이 명확히 기록되어 있을 때만 두 문장 I-메시지로 써라. 원인이 없을 때는 예를 들어 '지금 기분이 좋지 않아. 서로 기분 상하게 말하지 말고 이야기하자.'처럼 자연스럽게 써라. 단어 하나만 바꾸지 마라.\n내 이전 메시지(없으면 무시):\n{context}\n원문({sender} 작성): {text}"
     );
     let response = reqwest::Client::new()
         .post("https://api.openai.com/v1/responses")
@@ -602,6 +602,19 @@ async fn ai_rewrite(Json(input): Json<RewriteRequest>) -> Json<serde_json::Value
 }
 async fn ai_schedule(Json(input): Json<ScheduleCheck>) -> Json<serde_json::Value> {
     let text = input.text.trim();
+    let compact = text
+        .chars()
+        .filter(|c| !c.is_whitespace() && !c.is_ascii_punctuation())
+        .collect::<String>();
+    let arrival_chase = ["왜안와", "왜안왔", "빨리와", "어서와", "언제와", "지금와"]
+        .iter()
+        .any(|phrase| compact.contains(phrase));
+    let planning_signal = ["내일", "모레", "다음주", "약속", "만나", "놀자", "가자", "회의", "피피티", "발표", "과제", "숙제", "제출", "까지"]
+        .iter()
+        .any(|phrase| compact.contains(phrase));
+    if arrival_chase && !planning_signal {
+        return Json(serde_json::json!({"is_schedule":false}));
+    }
     let context = input
         .context
         .as_deref()
@@ -615,7 +628,7 @@ async fn ai_schedule(Json(input): Json<ScheduleCheck>) -> Json<serde_json::Value
         return Json(serde_json::json!({"is_schedule":false}));
     };
     let prompt = format!(
-        "너는 채팅에서 일정·약속·할 일을 찾는 도우미다. 함께 만나거나 놀거나 어디 가자는 제안뿐 아니라 '피피티 만들어줘', '발표 준비하자', '금요일까지 보고서 내자' 같은 구체적인 할 일 요청도 is_schedule=true로 판단한다. 단순 인사·과거 회상·가정은 false다. true라면 JSON만 출력: {{\"is_schedule\":true,\"title\":\"일정\",\"fields\":[{{\"label\":\"할일\",\"value\":string}},{{\"label\":\"누구\",\"value\":string}},{{\"label\":\"언제\",\"value\":string}},{{\"label\":\"어디\",\"value\":string}},...]}}. fields에는 반드시 할일·누구·언제·어디를 이 순서로 포함한다. 알 수 없는 값은 반드시 빈 문자열로 두고 '미정'이나 추측을 쓰지 마라. 예를 들어 '피피티 만들어줘'는 할일='피피티 만들기', 나머지는 빈 문자열이다. '금요일까지 바나나가 피피티 만들어'는 할일='피피티 만들기', 누구='바나나', 언제='금요일', 어디=''다. 필요할 때만 세부사항을 추가한다. false라면 {{\"is_schedule\":false}}만 출력한다.\n보낸 사람: {}\n최근 대화:\n{}\n현재 메시지: {}",
+        "너는 채팅에서 새 일정·약속·할 일을 찾는 도우미다. 앞으로 할 일을 제안하거나 확정하는 문장만 true다. 함께 만나거나 놀거나 어디 가자는 새 제안, '피피티 만들어줘', '발표 준비하자', '금요일까지 보고서 내자' 같은 구체적인 할 일 요청은 true다. 이미 진행 중인 약속에서 하는 재촉·항의·상태 확인은 일정이 아니다. '왜 안 와?', '빨리 와', '언제 와?', '지금 8시 30분이잖아'는 절대 false다. 단순 인사·과거 회상·가정도 false다. true라면 JSON만 출력: {{\"is_schedule\":true,\"title\":\"일정\",\"fields\":[{{\"label\":\"할일\",\"value\":string}},{{\"label\":\"누구\",\"value\":string}},{{\"label\":\"언제\",\"value\":string}},{{\"label\":\"어디\",\"value\":string}},...]}}. fields에는 반드시 할일·누구·언제·어디를 이 순서로 포함한다. 알 수 없는 값은 반드시 빈 문자열로 두고 '미정'이나 추측을 쓰지 마라. 예를 들어 '피피티 만들어줘'는 할일='피피티 만들기', 나머지는 빈 문자열이다. '금요일까지 바나나가 피피티 만들어'는 할일='피피티 만들기', 누구='바나나', 언제='금요일', 어디=''다. 필요할 때만 세부사항을 추가한다. false라면 {{\"is_schedule\":false}}만 출력한다.\n보낸 사람: {}\n최근 대화:\n{}\n현재 메시지: {}",
         input.sender.trim(), context, text
     );
     let response = reqwest::Client::new()
