@@ -261,4 +261,15 @@ async function send(event){
     if(pendingSend===next)await sendApproved();
   }
 }
+// Old preview results were made while the conversation was included in the
+// request. Never reuse them after switching to current-message-only checks.
+function aiResultKeyV4(text){return `v4|${aiIntervention}|${String(text||'').trim().toLowerCase()}`}
+function savedAiResult(text){return aiSavedResults[aiResultKeyV4(text)]||null}
+function rememberAiResult(text,result){
+  const key=aiResultKeyV4(text);
+  aiSavedResults[key]={...result,source:'saved'};
+  const keys=Object.keys(aiSavedResults);
+  if(keys.length>180)keys.slice(0,keys.length-180).forEach(key=>delete aiSavedResults[key]);
+  try{localStorage.setItem('retone-ai-results-v1',JSON.stringify(aiSavedResults))}catch{}
+}
 start();
