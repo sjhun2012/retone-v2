@@ -147,11 +147,13 @@ struct AiCheck {
     text: String,
     ai_intervention: Option<String>,
     context: Option<Vec<String>>,
+    sender: Option<String>,
 }
 #[derive(Deserialize)]
 struct RewriteRequest {
     text: String,
     context: Option<Vec<String>>,
+    sender: Option<String>,
 }
 #[derive(Deserialize)]
 struct AiReport {
@@ -341,6 +343,7 @@ async fn ai_check(State(app): State<App>, Json(input): Json<AiCheck>) -> Json<se
         .cloned()
         .collect::<Vec<_>>()
         .join("\n");
+    let sender = input.sender.as_deref().unwrap_or("현재 사용자").trim();
     let pass = [
         "ㅋㅋ",
         "ㅋㅋㅋ",
@@ -488,7 +491,7 @@ async fn ai_check(State(app): State<App>, Json(input): Json<AiCheck>) -> Json<se
         );
     };
     let prompt = format!(
-        "너는 Re:Tone의 대화 거울이다. 판정자·검열자·사실확인 기관이 아니다. 현재 문장을 오직 '이렇게 들릴 수도 있어요'라는 제안으로만 비춘다.\n1) 심한 욕설·위협·명백한 조롱뿐 아니라, 비꼼·냉소·돌려 말하는 압박·상대를 작게 만드는 표현도 알아차린다. 친한 사이의 가벼운 농담은 WARN하지 않는다.\n2) WARN일 때 suggestion은 반드시 이 문장에 맞춰 두 문장으로 쓴다. 첫 문장은 실제 문제 지점(단어·어조·비꼼)을 따옴표로 구체적으로 짚고 왜 상대가 압박·비난·조롱으로 느낄 수 있는지 설명한다. 둘째 문장은 원래 의도를 살린 짧은 대체 표현을 제안한다. 최근 대화 맥락이 있다면 갈등의 원인과 사용자의 바람을 살리되, 맥락에 없는 사실을 만들지 마라.\n3) 정보 점검: 건강·안전·법·돈·정치·재난·통계·속보성 주장에 출처·날짜·원문이 빠졌다면 info.level=check. 진실·거짓을 판단하지 말고 출처와 날짜 확인을 제안한다.\n4) 현재 개입 강도는 {level}이다. standard는 뚜렷한 경우만, careful은 비꼼·오해 가능성까지 조금 더 꼼꼼히 본다.\n5) JSON만 출력: {{\"verdict\":\"PASS|WARN\",\"suggestion\":string|null,\"info\":{{\"level\":\"none|check\",\"note\":string|null,\"queries\":[string]}}}}. queries는 확인할 검색어 0~2개.\n최근 대화(없으면 무시):\n{context}\n문장: {text}"
+        "너는 Re:Tone의 대화 거울이다. 판정자·검열자·사실확인 기관이 아니다. 현재 문장을 오직 '이렇게 들릴 수도 있어요'라는 제안으로만 비춘다.\n현재 문장은 반드시 '{sender}'가 작성했다. 최근 대화는 화자 이름과 함께 주어지며, 이름을 바꾸거나 상대가 하지 않은 행동을 만들지 마라.\n1) 심한 욕설·위협·명백한 조롱뿐 아니라, 비꼼·냉소·돌려 말하는 압박·상대를 작게 만드는 표현도 알아차린다. 친한 사이의 가벼운 농담은 WARN하지 않는다.\n2) WARN일 때 suggestion은 반드시 이 문장에 맞춰 두 문장으로 쓴다. 첫 문장은 실제 문제 지점(단어·어조·비꼼)을 따옴표로 구체적으로 짚고 왜 상대가 압박·비난·조롱으로 느낄 수 있는지 설명한다. 둘째 문장은 원래 의도를 살린 짧은 대체 표현을 제안한다. 최근 대화 맥락이 있다면 갈등의 원인과 사용자의 바람을 살리되, 맥락에 없는 사실을 만들지 마라.\n3) 정보 점검: 건강·안전·법·돈·정치·재난·통계·속보성 주장에 출처·날짜·원문이 빠졌다면 info.level=check. 진실·거짓을 판단하지 말고 출처와 날짜 확인을 제안한다.\n4) 현재 개입 강도는 {level}이다. standard는 뚜렷한 경우만, careful은 비꼼·오해 가능성까지 조금 더 꼼꼼히 본다.\n5) JSON만 출력: {{\"verdict\":\"PASS|WARN\",\"suggestion\":string|null,\"info\":{{\"level\":\"none|check\",\"note\":string|null,\"queries\":[string]}}}}. queries는 확인할 검색어 0~2개.\n최근 대화(없으면 무시):\n{context}\n현재 문장({sender} 작성): {text}"
     );
     let res = reqwest::Client::new()
         .post("https://api.openai.com/v1/responses")
@@ -542,6 +545,7 @@ async fn ai_rewrite(Json(input): Json<RewriteRequest>) -> Json<serde_json::Value
         .cloned()
         .collect::<Vec<_>>()
         .join("\n");
+    let sender = input.sender.as_deref().unwrap_or("현재 사용자").trim();
     // Common short insults should feel immediate and natural. They do not need
     // an external model call, which also avoids rewriting them word-by-word.
     let compact = text
@@ -566,7 +570,7 @@ async fn ai_rewrite(Json(input): Json<RewriteRequest>) -> Json<serde_json::Value
         return Json(serde_json::json!({"suggestion":"","error":"OPENAI_API_KEY_MISSING"}));
     };
     let prompt = format!(
-        "다음 채팅을 뜻은 최대한 유지하면서 상대가 덜 공격적으로 들릴 자연스러운 한국어로 바꿔줘. 판정·설명·따옴표 없이 바꾼 문장만 출력. 욕설·인신공격은 완곡한 욕설로 바꾸지 말고, 문장 전체의 요청·질문·상황은 살린 채 화난 감정과 상대에게 바라는 행동을 분명히 말해라. 최근 대화에 상대의 구체 행동이나 갈등 원인이 있으면 반드시 그것을 포함해 두 문장 I-메시지로 써라: '네가 [맥락 속 행동]해서 내가 [감정]. 앞으로 [구체 요청]해줬으면 해.' 예를 들어 최근 대화에 '약속 시간을 또 바꿨어'가 있으면 '약속 시간을 또 바꿔서 내가 속상했어. 앞으로 바꾸기 전에 미리 말해줬으면 해.'처럼 써야 하며, '그렇게 말하지 말아줘'처럼 맥락을 버린 일반 문장으로 끝내지 마라. 단, 맥락에 없는 사실을 지어내지는 마라. 최근 대화에 원인이 없을 때만 맥락 없는 모욕을 자연스러운 I-메시지로 바꾼다. 단어 하나만 바꾸지 마라. 최근 대화(없으면 무시):\n{context}\n원문: {text}"
+        "다음 채팅을 뜻은 최대한 유지하면서 상대가 덜 공격적으로 들릴 자연스러운 한국어로 바꿔줘. 판정·설명·따옴표 없이 바꾼 문장만 출력.\n중요: 원문은 반드시 '{sender}'가 작성했다. 최근 대화의 각 줄은 실제 화자 이름을 가진 기록이다. 원문에 있는 욕설은 '{sender}'가 한 말이므로, 그것만 근거로 상대가 욕하거나 잘못했다고 쓰지 마라. 상대가 한 구체 행동은 최근 대화에 상대 이름으로 명시된 경우에만 언급할 수 있다. 사실이 없으면 '네가 그렇게 욕해서'처럼 상대의 행동을 지어내지 말고, '{sender}' 자신의 감정과 앞으로의 대화 방식을 말해라.\n욕설·인신공격은 완곡한 욕설로 바꾸지 말고, 문장 전체의 요청·질문·상황은 살린 채 화난 감정과 상대에게 바라는 행동을 분명히 말해라. 상대의 구체 행동이 기록되어 있으면 두 문장 I-메시지로 써라. 원인이 없을 때는 예를 들어 '지금 너무 화가 났어. 서로 기분 상하게 말하지 말고 이야기하자.'처럼 자연스럽게 써라. 단어 하나만 바꾸지 마라.\n최근 대화(없으면 무시):\n{context}\n원문({sender} 작성): {text}"
     );
     let response = reqwest::Client::new()
         .post("https://api.openai.com/v1/responses")
