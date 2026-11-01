@@ -191,4 +191,74 @@ async function setAvatar(input){const file=input.files?.[0];if(!file||!signedInI
 function saveStatusMessage(){const input=document.querySelector('#status-message'),status=(input?.value||'').trim().slice(0,60);if(status)localStorage.setItem(statusStorageKey(),status);else localStorage.removeItem(statusStorageKey());settings()}
 async function settings(){nav='settings';try{await loadUserAvatars()}catch{}const avatar=userAvatarByName[signedIn]||localStorage.getItem(avatarStorageKey());const status=localStorage.getItem(statusStorageKey())||'';app.innerHTML=`<main class="layout android-layout">${rail()}<section class="page"><header class="head"><h1>설정</h1></header><div class="content"><div class="intro"><h2>${esc(signedIn)}님</h2><p>프로필과 앱 사용 환경을 관리해요.</p></div><div class="rooms"><label class="room"><span class="avatar">${avatarMarkup(signedIn,avatar)}</span><span class="copy"><b>프로필 사진 바꾸기</b><span>이 계정의 친구·채팅 화면에 표시돼요.</span></span><input hidden type="file" accept="image/*" onchange="setAvatar(this)"></label><section class="profile-status"><b>상태메시지</b><p>친구에게 보여줄 짧은 한마디를 적어 보세요.</p><div><input id="status-message" maxlength="60" value="${proposalInputValue(status)}" placeholder="예: 오늘은 답장이 조금 늦어요"><button onclick="saveStatusMessage()">저장</button></div></section><button class="room" onclick="showAiPolicy()"><span class="avatar">✦</span><span class="copy"><b>AI 사용 안내</b><span>대화 도움의 사용 범위를 확인해요.</span></span></button><button class="room danger" onclick="deleteMyAccount()"><span class="avatar">−</span><span class="copy"><b>회원탈퇴</b><span>이 앱의 계정과 데모 데이터를 삭제해요.</span></span></button><button class="room" onclick="logout()"><span class="avatar">↪</span><span class="copy"><b>로그아웃</b><span>이 기기에서 안전하게 로그아웃해요.</span></span></button></div></div></section>${androidNav()}</main>`}
 async function deleteMyAccount(){if(!signedInId||!confirm('정말 회원탈퇴할까요? 데모 모드에서는 복구할 수 없어요.'))return;await api(`/api/users/${signedInId}`,{method:'DELETE'});localStorage.removeItem(avatarStorageKey());localStorage.removeItem(statusStorageKey());localStorage.removeItem('retone-avatar');logout()}
+// The typing preview is intentionally based on the text being typed only.  Passing
+// the whole conversation to this lightweight safety check let the model describe a
+// previous speaker's message as if it were the sender's current message.
+async function runAiCheck(text){
+  if(aiPrefetch.text!==text)return null;
+  setAiStatus('AI 확인 중',true);
+  const request=api('/api/ai/check',{method:'POST',body:JSON.stringify({text,ai_intervention:aiIntervention,sender:signedIn})});
+  aiPrefetch.promise=request;
+  try{
+    const result=await request;
+    if(aiPrefetch.text===text){
+      aiPrefetch.result=result;
+      aiPrefetch.promise=null;
+      rememberAiResult(text,result);
+      setAiStatus(result.source==='cache'?'저장된 확인 결과 사용':'AI 확인 완료');
+    }
+    return result;
+  }catch{
+    if(aiPrefetch.text===text){aiPrefetch.promise=null;setAiStatus('');}
+    return null;
+  }
+}
+async function checkForSend(body){
+  if(aiIntervention==='off')return {verdict:'PASS',info:{level:'none'}};
+  const saved=!strongExpression(body)&&savedAiResult(body);
+  if(saved)return saved;
+  clearTimeout(aiPrefetch.timer);
+  // Send checks own their response instead of reading a shared typing-preview
+  // result. This prevents a stale request from being shown for another message.
+  const result=await api('/api/ai/check',{method:'POST',body:JSON.stringify({text:body,ai_intervention:aiIntervention,sender:signedIn})});
+  if(aiPrefetch.text===body){aiPrefetch.result=result;aiPrefetch.promise=null;rememberAiResult(body,result);}
+  return result||{verdict:'PASS',info:{level:'none'}};
+}
+function showCheckResult(result){
+  if(!pendingSend)return;
+  pendingSend.result=result;
+  const info=result.info||{level:'none',queries:[]};
+  if(result.verdict==='WARN'){
+    removePendingBubble();
+    popup(`<div class="ai-check warn"><span>Re:Tone의 제안</span><h2>이렇게 들릴 수도 있어요</h2><p>이 표현은 상대에게 공격적이거나 위협적으로 들릴 수 있어요. 표현을 다듬거나 그대로 보낼 수 있어요.</p><small>Re:Tone은 문장을 판단하거나 막지 않아요. 선택은 언제나 나에게 있어요.</small><div class="modal-actions"><button class="quiet" onclick="rewritePending()">AI로 표현 바꾸기</button><button onclick="sendApproved()">이대로 보내기</button></div></div>`);
+    return;
+  }
+  if(info.level==='check'){
+    removePendingBubble();
+    popup(`<div class="ai-check info"><span>Re:Tone의 제안</span><h2>출처를 함께 적어볼까요?</h2><p>${esc(info.note||'이 내용은 출처와 작성 날짜를 함께 확인해 보면 더 정확하게 전달될 수 있어요.')}</p>${(info.queries||[]).length?`<ul>${info.queries.map(q=>`<li>${esc(q)}</li>`).join('')}</ul>`:''}<small>Re:Tone은 이 정보의 진실·거짓을 판단하지 않아요.</small><div class="modal-actions"><button class="quiet" onclick="editPendingSend()">내용 보완하기</button><button onclick="sendApproved()">이대로 보내기</button></div></div>`);
+    return;
+  }
+  sendApproved();
+}
+async function send(event){
+  event.preventDefault();
+  if(pendingSend)return;
+  const input=document.querySelector('#text'),body=input?.value.trim();
+  if(!body)return;
+  const useApprovedRewrite=Boolean(rewrittenApprovedText)&&body===rewrittenApprovedText;
+  rewrittenApprovedText='';
+  if(useApprovedRewrite){input.value='';input.disabled=true;await sendChatMessage(roomId,body);return;}
+  const next={body,room:roomId,token:crypto.randomUUID()};
+  pendingSend=next;
+  input.value='';input.disabled=true;
+  input.placeholder='AI가 확인 중이에요…';
+  addPendingBubble(body);
+  try{
+    const result=await checkForSend(body);
+    if(pendingSend!==next)return;
+    showCheckResult(result);
+  }catch{
+    if(pendingSend===next)await sendApproved();
+  }
+}
 start();
