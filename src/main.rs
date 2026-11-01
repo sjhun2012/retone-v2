@@ -561,15 +561,19 @@ async fn send(
     Path(id): Path<String>,
     Json(input): Json<Send>,
 ) -> Result<Json<Message>, StatusCode> {
-    if input.body.trim().is_empty() {
+    let sender = input.sender.trim().chars().take(24).collect::<String>();
+    if sender.is_empty() || input.body.trim().is_empty() {
         return Err(StatusCode::BAD_REQUEST);
     }
     let mut d = app.data.write().await;
     let message = Message {
         id: Uuid::new_v4().to_string(),
         room_id: id.clone(),
-        sender: input.sender,
-        mine: true,
+        sender,
+        // A message is not intrinsically "mine": that depends on the person
+        // currently looking at it. The browser compares the sender to its
+        // signed-in user, so A's message is shown as incoming for B.
+        mine: false,
         body: input.body.trim().to_string(),
         created: Utc::now().timestamp_millis(),
         unread: 0,
