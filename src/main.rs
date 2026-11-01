@@ -161,6 +161,10 @@ struct AiReport {
 struct Preferences {
     ai_intervention: String,
 }
+#[derive(Deserialize)]
+struct AvatarUpdate {
+    avatar_url: Option<String>,
+}
 #[derive(Serialize)]
 struct PublicUser {
     id: String,
@@ -278,6 +282,28 @@ async fn update_preferences(
         let mut data = app.data.write().await;
         let user = data.users.iter_mut().find(|user| user.id == id).ok_or(StatusCode::NOT_FOUND)?;
         user.ai_intervention = level.clone();
+        (user.id, user.name.clone(), user.avatar_url.clone(), user.ai_intervention.clone())
+    };
+    Ok(Json(user_out(row.0, row.1, row.2, row.3)))
+}
+async fn update_avatar(
+    State(app): State<App>,
+    Path(id): Path<Uuid>,
+    Json(input): Json<AvatarUpdate>,
+) -> Result<Json<PublicUser>, StatusCode> {
+    let avatar_url = input.avatar_url.filter(|url| url.len() <= 300_000);
+    let row = if let Some(db) = &app.db {
+        sqlx::query_as::<_, (Uuid, String, Option<String>, String)>("UPDATE retone_v2.users SET avatar_url=$1 WHERE id=$2 AND deleted_at IS NULL RETURNING id,name,avatar_url,ai_intervention")
+            .bind(&avatar_url)
+            .bind(id)
+            .fetch_optional(db)
+            .await
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+            .ok_or(StatusCode::NOT_FOUND)?
+    } else {
+        let mut data = app.data.write().await;
+        let user = data.users.iter_mut().find(|user| user.id == id).ok_or(StatusCode::NOT_FOUND)?;
+        user.avatar_url = avatar_url.clone();
         (user.id, user.name.clone(), user.avatar_url.clone(), user.ai_intervention.clone())
     };
     Ok(Json(user_out(row.0, row.1, row.2, row.3)))
@@ -938,6 +964,7 @@ async fn main() {
         .route("/api/auth/login", post(login))
         .route("/api/users", get(users))
         .route("/api/users/{id}/preferences", patch(update_preferences))
+        .route("/api/users/{id}/avatar", patch(update_avatar))
         .route("/api/users/{id}", delete(delete_account))
         .route("/api/ai/check", post(ai_check))
         .route("/api/ai/rewrite", post(ai_rewrite))
