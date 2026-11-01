@@ -571,7 +571,7 @@ async fn ai_rewrite(Json(input): Json<RewriteRequest>) -> Json<serde_json::Value
         return Json(serde_json::json!({"suggestion":"","error":"OPENAI_API_KEY_MISSING"}));
     };
     let prompt = format!(
-        "다음 채팅을 뜻은 최대한 유지하면서 상대가 덜 공격적으로 들릴 자연스러운 한국어로 바꿔줘. 판정·설명·따옴표 없이 바꾼 문장만 출력.\n중요: 원문은 반드시 '{sender}'가 작성했다. 최근 대화에는 오직 '{sender}'가 이전에 작성한 문장만 제공된다. 다른 사람이 느낀 감정, 다른 사람이 한 불만, 또는 상대가 해야 할 사과를 '{sender}'의 말처럼 가져오지 마라. 즉 다른 사람이 '왜 안 와?'라고 말했다고 해서 '{sender}'에게 '내가 기대했는데 네가 늦어서 속상해'라고 쓰게 하면 안 된다. 원문에 있는 욕설도 '{sender}'가 한 말이므로, 그것만 근거로 상대가 욕하거나 잘못했다고 쓰지 마라. 사실이 부족하면 상대 행동을 지어내지 말고 '{sender}'의 현재 감정과 앞으로의 대화 방식을 중립적으로 말해라.\n욕설·인신공격은 완곡한 욕설로 바꾸지 말고, 문장 전체의 요청·질문·상황은 살린 채 화난 감정과 상대에게 바라는 행동을 분명히 말해라. 원인이 명확히 기록되어 있을 때만 두 문장 I-메시지로 써라. 원인이 없을 때는 예를 들어 '지금 기분이 좋지 않아. 서로 기분 상하게 말하지 말고 이야기하자.'처럼 자연스럽게 써라. 단어 하나만 바꾸지 마라.\n내 이전 메시지(없으면 무시):\n{context}\n원문({sender} 작성): {text}"
+        "다음 채팅을 뜻은 최대한 유지하면서 상대가 덜 공격적으로 들릴 자연스러운 한국어로 바꿔줘. 판정·설명·따옴표 없이 바꾼 문장만 출력.\n중요: 원문은 반드시 '{sender}'가 작성했다. 최근 대화에는 [현재 사용자]와 [상대] 역할표가 있다. 상대의 감정·불만을 현재 사용자의 감정으로 복사하지 마라. 예를 들어 [상대]가 '너 왜 안 와?'라고 했다고 해서 '{sender}'에게 '내가 기대했는데 네가 늦어서 속상해'라고 쓰게 하면 안 된다. 단, 상대가 현재 사용자의 늦음·실수·약속 변경을 구체적으로 지적했고 현재 사용자가 '알빠야?', '니 상관 아니야'처럼 방어적으로 답하려 한다면, 상대의 대사를 흉내 내지 말고 현재 사용자가 책임지는 사과로 바꿔라. 예: '늦어서 미안해. 다음에는 미리 연락할게.' 원문에 있는 욕설도 '{sender}'가 한 말이므로, 그것만 근거로 상대가 욕하거나 잘못했다고 쓰지 마라.\n욕설·인신공격은 완곡한 욕설로 바꾸지 말고, 문장 전체의 요청·질문·상황은 살린 채 화난 감정과 상대에게 바라는 행동을 분명히 말해라. 사실이 부족하면 상대 행동을 지어내지 말고 중립적인 감정과 대화 방식을 말해라. 단어 하나만 바꾸지 마라.\n최근 대화(없으면 무시):\n{context}\n원문({sender} 작성): {text}"
     );
     let response = reqwest::Client::new()
         .post("https://api.openai.com/v1/responses")
@@ -614,6 +614,26 @@ async fn ai_schedule(Json(input): Json<ScheduleCheck>) -> Json<serde_json::Value
         .any(|phrase| compact.contains(phrase));
     if arrival_chase && !planning_signal {
         return Json(serde_json::json!({"is_schedule":false}));
+    }
+    let explicit_invitation = ["만나자", "만날래", "만나자고", "여행가자", "놀러가자", "놀자", "같이가자"]
+        .iter()
+        .any(|phrase| compact.contains(phrase));
+    let future_hint = ["내일", "모레", "다음주", "이번주"]
+        .iter()
+        .find(|phrase| compact.contains(**phrase))
+        .map(|phrase| (*phrase).to_string());
+    if explicit_invitation && future_hint.is_some() {
+        let task = if compact.contains("여행") { "여행" } else if compact.contains("놀") { "함께 놀기" } else { "만나기" };
+        return Json(serde_json::json!({
+            "is_schedule":true,
+            "title":"일정",
+            "fields":[
+                {"label":"할일","value":task},
+                {"label":"누구","value":""},
+                {"label":"언제","value":future_hint.unwrap_or_default()},
+                {"label":"어디","value":""}
+            ]
+        }));
     }
     let context = input
         .context
