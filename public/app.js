@@ -272,4 +272,77 @@ function rememberAiResult(text,result){
   if(keys.length>180)keys.slice(0,keys.length-180).forEach(key=>delete aiSavedResults[key]);
   try{localStorage.setItem('retone-ai-results-v1',JSON.stringify(aiSavedResults))}catch{}
 }
+let userProfilesById={},userProfilesByName={};
+async function loadUserAvatars(){
+  const users=await api('/api/users');
+  userProfilesById=Object.fromEntries(users.map(user=>[user.id,user]));
+  userProfilesByName=Object.fromEntries(users.map(user=>[user.name,user]));
+  userAvatarByName=Object.fromEntries(users.map(user=>[user.name,user.avatar_url]));
+  const mine=userProfilesById[signedInId];
+  localStorage.removeItem('retone-avatar');
+  if(mine?.avatar_url)localStorage.setItem(avatarStorageKey(),mine.avatar_url);
+  else localStorage.removeItem(avatarStorageKey());
+  return users;
+}
+function messageTime(created){
+  const date=new Date(Number(created));
+  if(Number.isNaN(date.getTime()))return '';
+  return new Intl.DateTimeFormat('ko-KR',{hour:'numeric',minute:'2-digit',hour12:true}).format(date);
+}
+function showUserProfile(userId){
+  const user=userProfilesById[userId]||userProfilesByName[userId];
+  if(!user)return;
+  const status=user.status_message?.trim()||'등록한 상태메시지가 없어요.';
+  popup(`<div class="user-profile-modal"><div class="user-profile-avatar">${avatarMarkup(user.name,user.avatar_url)}</div><h2>${esc(user.name)}</h2><p>${esc(status)}</p><button onclick="closePopup()">닫기</button></div>`);
+}
+function view(message){
+  const mine=isMyMessage(message),user=userProfilesByName[message.sender],avatar=user?.avatar_url||userAvatarByName[message.sender],profileButton=!mine&&user?`<button class="message-avatar profile-trigger" aria-label="${esc(message.sender)} 프로필 보기" onclick="event.stopPropagation();showUserProfile('${user.id}')">${avatarMarkup(message.sender,avatar)}</button>`:'';
+  return `<article class="bubble ${mine?'mine':'peer'}" data-message-id="${esc(message.id)}" ${mine?'':`onclick="inspectMessage(${JSON.stringify(message.body)})"`}>${profileButton}<div class="meta"><span>${mine?'나':esc(message.sender)}</span><time>${messageTime(message.created)}</time></div>${esc(message.body)}${mine&&message.unread?`<span class="read">${message.unread}</span>`:''}${mine?`<button class="delete-message" title="메시지 삭제" onclick="removeMessage('${message.id}')">×</button>`:''}</article>`;
+}
+async function friends(){
+  nav='friends';
+  const users=await loadUserAvatars();
+  const hidden=hiddenFriendIds(),list=users.filter(user=>user.id!==signedInId&&!hidden.has(user.id)),hiddenCount=hidden.size;
+  app.innerHTML=`<main class="layout android-layout">${rail()}<section class="page"><header class="head"><h1>친구</h1><button class="new-room" onclick="newRoom()">＋ 단톡방</button></header><div class="content"><div class="intro"><h2>Re:Tone 친구</h2><p>프로필 사진을 누르면 친구의 상태메시지를 볼 수 있어요.</p>${hiddenCount?`<button class="hidden-manage" onclick="manageHiddenFriends()">숨긴 친구 ${hiddenCount}명 관리</button>`:''}</div><div class="rooms">${list.length?list.map(user=>`<div class="friend-row"><button class="friend-profile-button" aria-label="${esc(user.name)} 프로필 보기" onclick="showUserProfile('${user.id}')">${avatarMarkup(user.name,user.avatar_url)}</button><button class="room" onclick="startDirect('${esc(user.name)}','${user.id}')"><span class="copy"><b>${esc(user.name)}</b><span>${esc(user.status_message?.trim()||'눌러서 1:1 대화 시작')}</span></span><span>›</span></button><button class="hide-friend" onclick="hideFriend('${user.id}')">숨기기</button></div>`).join(''):`<div class="empty-chat"><b>표시할 친구가 없어요</b><span>친구가 가입하거나 숨긴 친구를 다시 보이게 해주세요.</span></div>`}</div></div></section>${androidNav()}</main>`;
+}
+async function saveStatusMessage(){
+  const input=document.querySelector('#status-message'),status=(input?.value||'').trim().slice(0,60);
+  if(!signedInId)return;
+  try{
+    const user=await api(`/api/users/${signedInId}/status`,{method:'PATCH',body:JSON.stringify({status_message:status})});
+    userProfilesById[user.id]=user;userProfilesByName[user.name]=user;userAvatarByName[user.name]=user.avatar_url||null;
+    localStorage.removeItem(statusStorageKey());
+    await settings();
+  }catch{alert('상태메시지를 저장하지 못했어요. 다시 시도해 주세요.')}
+}
+async function settings(){
+  nav='settings';
+  try{await loadUserAvatars()}catch{}
+  const mine=userProfilesById[signedInId]||{},avatar=mine.avatar_url||localStorage.getItem(avatarStorageKey()),status=mine.status_message?.trim()||'';
+  app.innerHTML=`<main class="layout android-layout">${rail()}<section class="page"><header class="head"><h1>설정</h1></header><div class="content"><div class="intro"><h2>${esc(signedIn)}님</h2><p>프로필과 앱 사용 환경을 관리해요.</p></div><div class="rooms"><label class="room"><span class="avatar">${avatarMarkup(signedIn,avatar)}</span><span class="copy"><b>프로필 사진 바꾸기</b><span>이 계정의 친구·채팅 화면에 표시돼요.</span></span><input hidden type="file" accept="image/*" onchange="setAvatar(this)"></label><section class="profile-status"><b>상태메시지</b><p>${status?`현재 상태: ${esc(status)}`:'친구에게 보여줄 짧은 한마디를 적어 보세요.'}</p><div><input id="status-message" maxlength="60" value="" placeholder="${status?'새 상태메시지 입력':'예: 오늘은 답장이 조금 늦어요'}"><button onclick="saveStatusMessage()">저장</button></div></section><button class="room" onclick="showAiPolicy()"><span class="avatar">✦</span><span class="copy"><b>AI 사용 안내</b><span>대화 도움의 사용 범위를 확인해요.</span></span></button><button class="room danger" onclick="deleteMyAccount()"><span class="avatar">−</span><span class="copy"><b>회원탈퇴</b><span>이 앱의 계정과 데모 데이터를 삭제해요.</span></span></button><button class="room" onclick="logout()"><span class="avatar">↪</span><span class="copy"><b>로그아웃</b><span>이 기기에서 안전하게 로그아웃해요.</span></span></button></div></div></section>${androidNav()}</main>`;
+}
+async function deleteOwnSchedule(id){
+  if(!confirm('이 일정을 모두의 화면에서 삭제할까요?'))return;
+  try{
+    await api(`/api/appointments/${id}/creator/${encodeURIComponent(signedIn)}`,{method:'DELETE'});
+    data=await api('/api/bootstrap');
+    renderRoomScheduleNotice();updateScheduleUi();
+  }catch{alert('일정을 삭제하지 못했어요. 내가 만든 일정인지 확인해 주세요.')}
+}
+function scheduleCard(appointment,chat=false){
+  const own=appointment.creator===signedIn;
+  return `<article class="schedule-item ${chat?'chat-schedule-card':''}" data-schedule-id="${appointment.id}"><button class="schedule-cancel" title="내 화면에서 숨기기" onclick="hideScheduleCard('${appointment.id}')">×</button>${own?`<button class="schedule-delete-global" title="모두에게서 일정 삭제" onclick="deleteOwnSchedule('${appointment.id}')">삭제</button>`:''}<button class="schedule-edit" onclick="editAppointment('${appointment.id}')"><strong>${esc(appointment.title||'일정')}</strong>${(appointment.fields||[]).map(field=>`<span class="schedule-field"><b>${esc(field.label)}</b><i>${esc(field.value)||'비어 있음'}</i></span>`).join('')}</button></article>`;
+}
+function roomScheduleNotice(room){
+  const appointments=roomAppointments(room);if(!appointments.length)return '';
+  const latest=appointments[0],summary=scheduleNoticeFields(latest),own=latest.creator===signedIn;
+  return `<aside class="room-notice" data-schedule-signature="${esc(appointments.map(item=>item.id).join('|'))}"><span class="notice-pin">📌</span><button class="notice-main" onclick="editAppointment('${latest.id}')"><b>${esc(latest.title||'일정')}</b><small>${summary||'일정 내용을 확인해 주세요.'}</small></button><button class="notice-view" onclick="showRoomSchedules('${room}')">보기${appointments.length>1?` ${appointments.length}`:''}</button>${own?`<button class="notice-delete" onclick="deleteOwnSchedule('${latest.id}')">삭제</button>`:''}<button class="notice-close" title="내 화면에서 숨기기" onclick="hideScheduleCard('${latest.id}')">×</button></aside>`;
+}
+async function openRoom(id){
+  roomId=id;if(!data)data=await api('/api/bootstrap');const room=data.rooms.find(item=>item.id===id);if(!room)return home();
+  await loadUserAvatars();const messages=await api(`/api/rooms/${id}/messages`);roomMessages=messages.slice();await api(`/api/rooms/${id}/read`,{method:'POST',body:JSON.stringify({reader:signedIn})});markMessagesRead(messages);unreadCounts[id]=0;
+  const title=roomDisplayName(room),names=roomPeople(room).join(', '),profile=userProfilesByName[title],titleMarkup=profile?`<button class="chat-profile-trigger" onclick="showUserProfile('${profile.id}')"><h1>${esc(title)}</h1><span>${esc(names)} · ${room.members}명</span></button>`:`<div class="room-title"><h1>${esc(title)}</h1><span>${esc(names)} · ${room.members}명</span></div>`;
+  app.innerHTML=`<main class="layout android-layout">${rail()}<section class="chat"><header class="head chat-head"><button class="back" onclick="home()">‹</button>${titleMarkup}<div class="chat-actions"><button onclick="inviteFriends()">＋ 초대</button><button onclick="newAgreement()">✓</button></div></header><div class="room-notice-host" id="room-schedule-notice">${roomScheduleNotice(id)}</div><section class="messages" id="messages">${messages.map(view).join('')}${data.agreements.slice(0,1).map(agreement=>`<article class="agreement"><b>✓ 공동 확인 · ${esc(agreement.task)}</b><small>담당 ${esc(agreement.assignee)} · ${esc(agreement.deadline)}</small></article>`).join('')}</section><form class="sendbar" onsubmit="send(event)"><input id="text" placeholder="메시지를 입력하세요" autocomplete="off" oninput="handleChatInput(this.value)"><span id="ai-status" class="ai-status"></span><button aria-label="보내기">↑</button></form></section></main>`;
+  const list=document.querySelector('#messages');list.scrollTop=list.scrollHeight;document.querySelector('#text')?.focus();updateUnreadUi();startInboxPolling();
+}
 start();

@@ -73,6 +73,7 @@ struct DemoUser {
     name: String,
     password_hash: String,
     avatar_url: Option<String>,
+    status_message: String,
     ai_intervention: String,
 }
 #[derive(Clone)]
@@ -169,11 +170,16 @@ struct Preferences {
 struct AvatarUpdate {
     avatar_url: Option<String>,
 }
+#[derive(Deserialize)]
+struct StatusUpdate {
+    status_message: String,
+}
 #[derive(Serialize)]
 struct PublicUser {
     id: String,
     name: String,
     avatar_url: Option<String>,
+    status_message: String,
     ai_intervention: String,
 }
 fn phone_hash(phone: &str) -> String {
@@ -195,12 +201,14 @@ fn user_out(
     id: Uuid,
     name: String,
     avatar_url: Option<String>,
+    status_message: String,
     ai_intervention: String,
 ) -> PublicUser {
     PublicUser {
         id: id.to_string(),
         name,
         avatar_url,
+        status_message,
         ai_intervention,
     }
 }
@@ -240,37 +248,37 @@ async fn signup(
         if data.users.iter().any(|user| user.phone_hash == phone) {
             return Err(StatusCode::CONFLICT);
         }
-        data.users.push(DemoUser { id, phone_hash: phone, name: name.to_string(), password_hash: hash, avatar_url: None, ai_intervention: level.clone() });
+        data.users.push(DemoUser { id, phone_hash: phone, name: name.to_string(), password_hash: hash, avatar_url: None, status_message: String::new(), ai_intervention: level.clone() });
     }
-    Ok(Json(user_out(id, name.to_string(), None, level)))
+    Ok(Json(user_out(id, name.to_string(), None, String::new(), level)))
 }
 async fn login(
     State(app): State<App>,
     Json(input): Json<Credentials>,
 ) -> Result<Json<PublicUser>, StatusCode> {
     let row = if let Some(db) = &app.db {
-        sqlx::query_as::<_,(Uuid,String,Option<String>,String,String)>("SELECT id,name,avatar_url,password_hash,ai_intervention FROM retone_v2.users WHERE phone_hash=$1 AND name=$2 AND deleted_at IS NULL").bind(phone_hash(&input.phone)).bind(input.name.trim()).fetch_optional(db).await.map_err(|_|StatusCode::INTERNAL_SERVER_ERROR)?.ok_or(StatusCode::UNAUTHORIZED)?
+        sqlx::query_as::<_,(Uuid,String,Option<String>,String,String,String)>("SELECT id,name,avatar_url,password_hash,status_message,ai_intervention FROM retone_v2.users WHERE phone_hash=$1 AND name=$2 AND deleted_at IS NULL").bind(phone_hash(&input.phone)).bind(input.name.trim()).fetch_optional(db).await.map_err(|_|StatusCode::INTERNAL_SERVER_ERROR)?.ok_or(StatusCode::UNAUTHORIZED)?
     } else {
         let data = app.data.read().await;
         let user = data.users.iter().find(|user| user.phone_hash == phone_hash(&input.phone) && user.name == input.name.trim()).ok_or(StatusCode::UNAUTHORIZED)?;
-        (user.id, user.name.clone(), user.avatar_url.clone(), user.password_hash.clone(), user.ai_intervention.clone())
+        (user.id, user.name.clone(), user.avatar_url.clone(), user.password_hash.clone(), user.status_message.clone(), user.ai_intervention.clone())
     };
     let parsed = PasswordHash::new(&row.3).map_err(|_| StatusCode::UNAUTHORIZED)?;
     Argon2::default()
         .verify_password(input.password.as_bytes(), &parsed)
         .map_err(|_| StatusCode::UNAUTHORIZED)?;
-    Ok(Json(user_out(row.0, row.1, row.2, row.4)))
+    Ok(Json(user_out(row.0, row.1, row.2, row.4, row.5)))
 }
 async fn users(State(app): State<App>) -> Result<Json<Vec<PublicUser>>, StatusCode> {
     let rows = if let Some(db) = &app.db {
-        sqlx::query_as::<_,(Uuid,String,Option<String>,String)>("SELECT id,name,avatar_url,ai_intervention FROM retone_v2.users WHERE deleted_at IS NULL ORDER BY created_at").fetch_all(db).await.map_err(|_|StatusCode::INTERNAL_SERVER_ERROR)?
+        sqlx::query_as::<_,(Uuid,String,Option<String>,String,String)>("SELECT id,name,avatar_url,status_message,ai_intervention FROM retone_v2.users WHERE deleted_at IS NULL ORDER BY created_at").fetch_all(db).await.map_err(|_|StatusCode::INTERNAL_SERVER_ERROR)?
     } else {
         let data = app.data.read().await;
-        data.users.iter().map(|user| (user.id, user.name.clone(), user.avatar_url.clone(), user.ai_intervention.clone())).collect()
+        data.users.iter().map(|user| (user.id, user.name.clone(), user.avatar_url.clone(), user.status_message.clone(), user.ai_intervention.clone())).collect()
     };
     Ok(Json(
         rows.into_iter()
-            .map(|r| user_out(r.0, r.1, r.2, r.3))
+            .map(|r| user_out(r.0, r.1, r.2, r.3, r.4))
             .collect(),
     ))
 }
@@ -281,14 +289,14 @@ async fn update_preferences(
 ) -> Result<Json<PublicUser>, StatusCode> {
     let level = ai_level(Some(&input.ai_intervention));
     let row = if let Some(db) = &app.db {
-        sqlx::query_as::<_,(Uuid,String,Option<String>,String)>("UPDATE retone_v2.users SET ai_intervention=$1 WHERE id=$2 AND deleted_at IS NULL RETURNING id,name,avatar_url,ai_intervention").bind(&level).bind(id).fetch_optional(db).await.map_err(|_|StatusCode::INTERNAL_SERVER_ERROR)?.ok_or(StatusCode::NOT_FOUND)?
+        sqlx::query_as::<_,(Uuid,String,Option<String>,String,String)>("UPDATE retone_v2.users SET ai_intervention=$1 WHERE id=$2 AND deleted_at IS NULL RETURNING id,name,avatar_url,status_message,ai_intervention").bind(&level).bind(id).fetch_optional(db).await.map_err(|_|StatusCode::INTERNAL_SERVER_ERROR)?.ok_or(StatusCode::NOT_FOUND)?
     } else {
         let mut data = app.data.write().await;
         let user = data.users.iter_mut().find(|user| user.id == id).ok_or(StatusCode::NOT_FOUND)?;
         user.ai_intervention = level.clone();
-        (user.id, user.name.clone(), user.avatar_url.clone(), user.ai_intervention.clone())
+        (user.id, user.name.clone(), user.avatar_url.clone(), user.status_message.clone(), user.ai_intervention.clone())
     };
-    Ok(Json(user_out(row.0, row.1, row.2, row.3)))
+    Ok(Json(user_out(row.0, row.1, row.2, row.3, row.4)))
 }
 async fn update_avatar(
     State(app): State<App>,
@@ -297,7 +305,7 @@ async fn update_avatar(
 ) -> Result<Json<PublicUser>, StatusCode> {
     let avatar_url = input.avatar_url.filter(|url| url.len() <= 300_000);
     let row = if let Some(db) = &app.db {
-        sqlx::query_as::<_, (Uuid, String, Option<String>, String)>("UPDATE retone_v2.users SET avatar_url=$1 WHERE id=$2 AND deleted_at IS NULL RETURNING id,name,avatar_url,ai_intervention")
+        sqlx::query_as::<_, (Uuid, String, Option<String>, String, String)>("UPDATE retone_v2.users SET avatar_url=$1 WHERE id=$2 AND deleted_at IS NULL RETURNING id,name,avatar_url,status_message,ai_intervention")
             .bind(&avatar_url)
             .bind(id)
             .fetch_optional(db)
@@ -308,9 +316,31 @@ async fn update_avatar(
         let mut data = app.data.write().await;
         let user = data.users.iter_mut().find(|user| user.id == id).ok_or(StatusCode::NOT_FOUND)?;
         user.avatar_url = avatar_url.clone();
-        (user.id, user.name.clone(), user.avatar_url.clone(), user.ai_intervention.clone())
+        (user.id, user.name.clone(), user.avatar_url.clone(), user.status_message.clone(), user.ai_intervention.clone())
     };
-    Ok(Json(user_out(row.0, row.1, row.2, row.3)))
+    Ok(Json(user_out(row.0, row.1, row.2, row.3, row.4)))
+}
+async fn update_status(
+    State(app): State<App>,
+    Path(id): Path<Uuid>,
+    Json(input): Json<StatusUpdate>,
+) -> Result<Json<PublicUser>, StatusCode> {
+    let status = input.status_message.trim().chars().take(60).collect::<String>();
+    let row = if let Some(db) = &app.db {
+        sqlx::query_as::<_, (Uuid, String, Option<String>, String, String)>("UPDATE retone_v2.users SET status_message=$1 WHERE id=$2 AND deleted_at IS NULL RETURNING id,name,avatar_url,status_message,ai_intervention")
+            .bind(&status)
+            .bind(id)
+            .fetch_optional(db)
+            .await
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+            .ok_or(StatusCode::NOT_FOUND)?
+    } else {
+        let mut data = app.data.write().await;
+        let user = data.users.iter_mut().find(|user| user.id == id).ok_or(StatusCode::NOT_FOUND)?;
+        user.status_message = status.clone();
+        (user.id, user.name.clone(), user.avatar_url.clone(), user.status_message.clone(), user.ai_intervention.clone())
+    };
+    Ok(Json(user_out(row.0, row.1, row.2, row.3, row.4)))
 }
 async fn delete_account(State(app): State<App>, Path(id): Path<Uuid>) -> StatusCode {
     if let Some(db) = &app.db {
@@ -1007,6 +1037,21 @@ async fn delete_appointment(State(app): State<App>, Path(id): Path<String>) -> S
     data.appointments.retain(|appointment| appointment.id != id);
     if data.appointments.len() < before { StatusCode::NO_CONTENT } else { StatusCode::NOT_FOUND }
 }
+async fn delete_own_appointment(
+    State(app): State<App>,
+    Path((id, creator)): Path<(String, String)>,
+) -> StatusCode {
+    let mut data = app.data.write().await;
+    let Some(index) = data
+        .appointments
+        .iter()
+        .position(|appointment| appointment.id == id && appointment.creator == creator)
+    else {
+        return StatusCode::NOT_FOUND;
+    };
+    data.appointments.remove(index);
+    StatusCode::NO_CONTENT
+}
 
 async fn prepare_storage() -> Option<PgPool> {
     let url = env::var("DATABASE_URL").ok()?;
@@ -1042,6 +1087,7 @@ async fn main() {
         .route("/api/users", get(users))
         .route("/api/users/{id}/preferences", patch(update_preferences))
         .route("/api/users/{id}/avatar", patch(update_avatar))
+        .route("/api/users/{id}/status", patch(update_status))
         .route("/api/users/{id}", delete(delete_account))
         .route("/api/ai/check", post(ai_check))
         .route("/api/ai/rewrite", post(ai_rewrite))
@@ -1054,6 +1100,7 @@ async fn main() {
         .route("/api/agreements", post(create_agreement))
         .route("/api/appointments", post(create_appointment))
         .route("/api/appointments/{id}", patch(update_appointment).delete(delete_appointment))
+        .route("/api/appointments/{id}/creator/{creator}", delete(delete_own_appointment))
         .route("/api/rooms/{id}/messages", get(messages).post(send))
         .route("/api/rooms/{id}/read", post(mark_messages_read))
         .route(
