@@ -49,9 +49,20 @@ struct Agreement {
 struct Appointment {
     id: String,
     title: String,
-    date: String,
-    place: String,
+    fields: Vec<ScheduleField>,
     creator: String,
+    source_message_id: Option<String>,
+}
+#[derive(Clone, Serialize)]
+struct ScheduleField {
+    id: String,
+    label: String,
+    value: String,
+}
+#[derive(Deserialize)]
+struct ScheduleFieldInput {
+    label: String,
+    value: String,
 }
 #[derive(Clone)]
 struct DemoUser {
@@ -103,9 +114,22 @@ struct NewAgreement {
 #[derive(Deserialize)]
 struct NewAppointment {
     title: String,
-    date: String,
-    place: String,
+    date: Option<String>,
+    place: Option<String>,
+    fields: Option<Vec<ScheduleFieldInput>>,
     creator: Option<String>,
+    source_message_id: Option<String>,
+}
+#[derive(Deserialize)]
+struct UpdateAppointment {
+    title: String,
+    fields: Vec<ScheduleFieldInput>,
+}
+#[derive(Deserialize)]
+struct ScheduleCheck {
+    text: String,
+    context: Option<Vec<String>>,
+    sender: String,
 }
 #[derive(Deserialize)]
 struct Credentials {
@@ -541,6 +565,64 @@ async fn ai_rewrite(Json(input): Json<RewriteRequest>) -> Json<serde_json::Value
     };
     Json(serde_json::json!({"suggestion":suggestion,"error":error}))
 }
+async fn ai_schedule(Json(input): Json<ScheduleCheck>) -> Json<serde_json::Value> {
+    let text = input.text.trim();
+    let context = input
+        .context
+        .as_deref()
+        .unwrap_or(&[])
+        .iter()
+        .take(6)
+        .cloned()
+        .collect::<Vec<_>>()
+        .join("\n");
+    let Some(key) = env::var("OPENAI_API_KEY").ok() else {
+        return Json(serde_json::json!({"is_schedule":false}));
+    };
+    let prompt = format!(
+        "너는 채팅에서 약속·일정 제안을 찾는 도우미다. 현재 메시지와 최근 대화를 보고 실제로 함께 만나거나 놀거나 어디 가거나 시간·장소를 정하려는 제안일 때만 is_schedule=true로 판단한다. '놀자', '어디 가자', '만나자', '언제 볼까', '약속 잡자' 같은 표현은 일정 후보가 될 수 있다. 단순 인사·과거 회상·가정은 false다. true라면 JSON만 출력: {{\"is_schedule\":true,\"title\":string,\"fields\":[{{\"label\":\"누구\",\"value\":string}},{{\"label\":\"언제\",\"value\":string}},{{\"label\":\"어디\",\"value\":string}},...]}}. 누락한 값은 '미정'으로 두고, 맥락에 없는 정보를 만들지 마라. fields에는 반드시 누구·언제·어디를 포함하며 필요하면 세부사항도 추가한다. false라면 {{\"is_schedule\":false}}만 출력한다.\n보낸 사람: {}\n최근 대화:\n{}\n현재 메시지: {}",
+        input.sender.trim(), context, text
+    );
+    let response = reqwest::Client::new()
+        .post("https://api.openai.com/v1/responses")
+        .bearer_auth(key)
+        .json(&serde_json::json!({"model":"gpt-4o-mini","input":prompt,"max_output_tokens":180}))
+        .send()
+        .await;
+    let parsed = match response {
+        Ok(response) => response
+            .json::<serde_json::Value>()
+            .await
+            .ok()
+            .and_then(|value| value["output"][0]["content"][0]["text"].as_str().map(str::to_string))
+            .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok())
+            .unwrap_or_default(),
+        Err(_) => serde_json::Value::Null,
+    };
+    if !parsed["is_schedule"].as_bool().unwrap_or(false) {
+        return Json(serde_json::json!({"is_schedule":false}));
+    }
+    let mut fields = parsed["fields"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|field| Some(ScheduleFieldInput {
+            label: field["label"].as_str()?.trim().to_string(),
+            value: field["value"].as_str()?.trim().to_string(),
+        }))
+        .collect::<Vec<_>>();
+    for label in ["누구", "언제", "어디"] {
+        if !fields.iter().any(|field| field.label == label) {
+            fields.push(ScheduleFieldInput { label: label.into(), value: "미정".into() });
+        }
+    }
+    let fields = schedule_fields(fields);
+    Json(serde_json::json!({
+        "is_schedule":true,
+        "title":parsed["title"].as_str().unwrap_or("새 일정").trim(),
+        "fields":fields.into_iter().map(|field| serde_json::json!({"label":field.label,"value":field.value})).collect::<Vec<_>>()
+    }))
+}
 async fn ai_support(Json(input): Json<RewriteRequest>) -> Json<serde_json::Value> {
     let text = input.text.trim();
     let Some(key) = env::var("OPENAI_API_KEY").ok() else {
@@ -758,37 +840,65 @@ async fn create_agreement(
     app.data.write().await.agreements.push(agreement.clone());
     Ok(Json(agreement))
 }
+fn schedule_fields(inputs: Vec<ScheduleFieldInput>) -> Vec<ScheduleField> {
+    inputs
+        .into_iter()
+        .filter_map(|field| {
+            let label = field.label.trim().chars().take(20).collect::<String>();
+            let value = field.value.trim().chars().take(100).collect::<String>();
+            (!label.is_empty()).then(|| ScheduleField { id: Uuid::new_v4().to_string(), label, value: if value.is_empty() { "미정".into() } else { value } })
+        })
+        .take(12)
+        .collect()
+}
+fn default_schedule_fields(creator: &str, date: Option<&str>, place: Option<&str>) -> Vec<ScheduleFieldInput> {
+    vec![
+        ScheduleFieldInput { label: "누구".into(), value: if creator.trim().is_empty() { "미정".into() } else { creator.trim().into() } },
+        ScheduleFieldInput { label: "언제".into(), value: date.unwrap_or("미정").trim().into() },
+        ScheduleFieldInput { label: "어디".into(), value: place.unwrap_or("미정").trim().into() },
+    ]
+}
 async fn create_appointment(
     State(app): State<App>,
     Json(input): Json<NewAppointment>,
 ) -> Result<Json<Appointment>, StatusCode> {
-    if input.title.trim().is_empty() || input.date.trim().is_empty() {
+    let NewAppointment { title, date, place, fields, creator, source_message_id } = input;
+    let title = title.trim();
+    if title.is_empty() {
         return Err(StatusCode::BAD_REQUEST);
     }
-    let appointment = Appointment {
-        id: Uuid::new_v4().to_string(),
-        title: input.title.trim().chars().take(80).collect(),
-        date: input.date.trim().chars().take(30).collect(),
-        place: if input.place.trim().is_empty() {
-            "장소 미정".into()
-        } else {
-            input.place.trim().chars().take(50).collect()
-        },
-        creator: input
-            .creator
-            .as_deref()
-            .unwrap_or("")
-            .trim()
-            .chars()
-            .take(24)
-            .collect(),
-    };
-    app.data
-        .write()
-        .await
-        .appointments
-        .push(appointment.clone());
+    let creator = creator.as_deref().unwrap_or("").trim().chars().take(24).collect::<String>();
+    let source_message_id = source_message_id.as_deref().map(str::trim).filter(|id| !id.is_empty()).map(str::to_string);
+    let fields = schedule_fields(fields.unwrap_or_else(|| default_schedule_fields(&creator, date.as_deref(), place.as_deref())));
+    let mut data = app.data.write().await;
+    if let Some(source_message_id) = &source_message_id {
+        if let Some(existing) = data.appointments.iter().find(|appointment| appointment.source_message_id.as_ref() == Some(source_message_id)) {
+            return Ok(Json(existing.clone()));
+        }
+    }
+    let appointment = Appointment { id: Uuid::new_v4().to_string(), title: title.chars().take(80).collect(), fields, creator, source_message_id };
+    data.appointments.push(appointment.clone());
     Ok(Json(appointment))
+}
+async fn update_appointment(
+    State(app): State<App>,
+    Path(id): Path<String>,
+    Json(input): Json<UpdateAppointment>,
+) -> Result<Json<Appointment>, StatusCode> {
+    if input.title.trim().is_empty() {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+    let mut data = app.data.write().await;
+    let appointment = data.appointments.iter_mut().find(|appointment| appointment.id == id).ok_or(StatusCode::NOT_FOUND)?;
+    appointment.title = input.title.trim().chars().take(80).collect();
+    appointment.fields = schedule_fields(input.fields);
+    Ok(Json(appointment.clone()))
+}
+async fn delete_appointment(State(app): State<App>, Path(id): Path<String>) -> StatusCode {
+    let mut data = app.data.write().await;
+    let before = data.appointments.len();
+    data.appointments.retain(|appointment| appointment.id != id);
+    if data.appointments.len() < before { StatusCode::NO_CONTENT } else { StatusCode::NOT_FOUND }
 }
 
 async fn prepare_storage() -> Option<PgPool> {
@@ -827,6 +937,7 @@ async fn main() {
         .route("/api/users/{id}", delete(delete_account))
         .route("/api/ai/check", post(ai_check))
         .route("/api/ai/rewrite", post(ai_rewrite))
+        .route("/api/ai/schedule", post(ai_schedule))
         .route("/api/ai/support", post(ai_support))
         .route("/api/ai/reports", post(report_ai))
         .route("/api/bootstrap", get(bootstrap))
@@ -834,6 +945,7 @@ async fn main() {
         .route("/api/rooms/{id}/members", post(invite_members))
         .route("/api/agreements", post(create_agreement))
         .route("/api/appointments", post(create_appointment))
+        .route("/api/appointments/{id}", patch(update_appointment).delete(delete_appointment))
         .route("/api/rooms/{id}/messages", get(messages).post(send))
         .route("/api/rooms/{id}/read", post(mark_messages_read))
         .route(
