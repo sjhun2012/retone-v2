@@ -503,8 +503,10 @@ async fn ai_rewrite(Json(input): Json<RewriteRequest>) -> Json<serde_json::Value
     } else {
         None
     };
-    if let Some(suggestion) = quick {
-        return Json(serde_json::json!({"suggestion":suggestion,"error":""}));
+    if context.is_empty() {
+        if let Some(suggestion) = quick {
+            return Json(serde_json::json!({"suggestion":suggestion,"error":""}));
+        }
     }
     let Some(key) = env::var("OPENAI_API_KEY").ok() else {
         return Json(serde_json::json!({"suggestion":"","error":"OPENAI_API_KEY_MISSING"}));
