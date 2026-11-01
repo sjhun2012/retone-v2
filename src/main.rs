@@ -27,6 +27,7 @@ struct Room {
     updated: i64,
     participant_names: Vec<String>,
     direct_key: Option<String>,
+    direct_member_names: Option<Vec<String>>,
 }
 #[derive(Clone, Serialize)]
 struct Message {
@@ -97,6 +98,7 @@ struct NewRoom {
     name: String,
     members: Option<Vec<String>>,
     direct_key: Option<String>,
+    owner: Option<String>,
 }
 #[derive(Deserialize)]
 struct InviteMembers {
@@ -798,6 +800,7 @@ async fn create_room(
         .map(str::trim)
         .filter(|key| !key.is_empty())
         .map(|key| key.chars().take(100).collect::<String>());
+    let owner = input.owner.as_deref().unwrap_or("").trim().chars().take(24).collect::<String>();
     let mut participant_names = Vec::new();
     for member in input.members.unwrap_or_default() {
         let member = member.trim().chars().take(24).collect::<String>();
@@ -805,6 +808,18 @@ async fn create_room(
             participant_names.push(member);
         }
     }
+    let direct_member_names = direct_key.as_ref().map(|_| {
+        let mut names = Vec::new();
+        if !owner.is_empty() {
+            names.push(owner.clone());
+        }
+        for member in &participant_names {
+            if !names.contains(member) {
+                names.push(member.clone());
+            }
+        }
+        names
+    });
     let mut data = app.data.write().await;
     if let Some(key) = &direct_key {
         if let Some(room) = data
@@ -818,13 +833,14 @@ async fn create_room(
     let room = Room {
         id: Uuid::new_v4().to_string(),
         name: name.chars().take(30).collect(),
-        members: (participant_names.len() + 1).min(u8::MAX as usize) as u8,
+        members: direct_member_names.as_ref().map(|names| names.len()).unwrap_or(participant_names.len() + 1).min(u8::MAX as usize) as u8,
         unread: 0,
         pinned: false,
         last: "새 대화를 시작해 보세요.".into(),
         updated: Utc::now().timestamp_millis(),
         participant_names,
         direct_key,
+        direct_member_names,
     };
     data.rooms.push(room.clone());
     Ok(Json(room))
