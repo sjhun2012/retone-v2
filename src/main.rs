@@ -52,6 +52,7 @@ struct Appointment {
     fields: Vec<ScheduleField>,
     creator: String,
     source_message_id: Option<String>,
+    room_id: Option<String>,
 }
 #[derive(Clone, Serialize)]
 struct ScheduleField {
@@ -119,6 +120,7 @@ struct NewAppointment {
     fields: Option<Vec<ScheduleFieldInput>>,
     creator: Option<String>,
     source_message_id: Option<String>,
+    room_id: Option<String>,
 }
 #[derive(Deserialize)]
 struct UpdateAppointment {
@@ -580,7 +582,7 @@ async fn ai_schedule(Json(input): Json<ScheduleCheck>) -> Json<serde_json::Value
         return Json(serde_json::json!({"is_schedule":false}));
     };
     let prompt = format!(
-        "너는 채팅에서 약속·일정 제안을 찾는 도우미다. 현재 메시지와 최근 대화를 보고 실제로 함께 만나거나 놀거나 어디 가거나 시간·장소를 정하려는 제안일 때만 is_schedule=true로 판단한다. '놀자', '어디 가자', '만나자', '언제 볼까', '약속 잡자' 같은 표현은 일정 후보가 될 수 있다. 단순 인사·과거 회상·가정은 false다. true라면 JSON만 출력: {{\"is_schedule\":true,\"title\":string,\"fields\":[{{\"label\":\"누구\",\"value\":string}},{{\"label\":\"언제\",\"value\":string}},{{\"label\":\"어디\",\"value\":string}},...]}}. 누락한 값은 '미정'으로 두고, 맥락에 없는 정보를 만들지 마라. fields에는 반드시 누구·언제·어디를 포함하며 필요하면 세부사항도 추가한다. false라면 {{\"is_schedule\":false}}만 출력한다.\n보낸 사람: {}\n최근 대화:\n{}\n현재 메시지: {}",
+        "너는 채팅에서 일정·약속·할 일을 찾는 도우미다. 함께 만나거나 놀거나 어디 가자는 제안뿐 아니라 '피피티 만들어줘', '발표 준비하자', '금요일까지 보고서 내자' 같은 구체적인 할 일 요청도 is_schedule=true로 판단한다. 단순 인사·과거 회상·가정은 false다. true라면 JSON만 출력: {{\"is_schedule\":true,\"title\":\"일정\",\"fields\":[{{\"label\":\"할일\",\"value\":string}},{{\"label\":\"누구\",\"value\":string}},{{\"label\":\"언제\",\"value\":string}},{{\"label\":\"어디\",\"value\":string}},...]}}. fields에는 반드시 할일·누구·언제·어디를 이 순서로 포함한다. 알 수 없는 값은 반드시 빈 문자열로 두고 '미정'이나 추측을 쓰지 마라. 예를 들어 '피피티 만들어줘'는 할일='피피티 만들기', 나머지는 빈 문자열이다. '금요일까지 바나나가 피피티 만들어'는 할일='피피티 만들기', 누구='바나나', 언제='금요일', 어디=''다. 필요할 때만 세부사항을 추가한다. false라면 {{\"is_schedule\":false}}만 출력한다.\n보낸 사람: {}\n최근 대화:\n{}\n현재 메시지: {}",
         input.sender.trim(), context, text
     );
     let response = reqwest::Client::new()
@@ -611,9 +613,9 @@ async fn ai_schedule(Json(input): Json<ScheduleCheck>) -> Json<serde_json::Value
             value: field["value"].as_str()?.trim().to_string(),
         }))
         .collect::<Vec<_>>();
-    for label in ["누구", "언제", "어디"] {
+    for label in ["할일", "누구", "언제", "어디"] {
         if !fields.iter().any(|field| field.label == label) {
-            fields.push(ScheduleFieldInput { label: label.into(), value: "미정".into() });
+            fields.push(ScheduleFieldInput { label: label.into(), value: String::new() });
         }
     }
     let fields = schedule_fields(fields);
@@ -846,23 +848,24 @@ fn schedule_fields(inputs: Vec<ScheduleFieldInput>) -> Vec<ScheduleField> {
         .filter_map(|field| {
             let label = field.label.trim().chars().take(20).collect::<String>();
             let value = field.value.trim().chars().take(100).collect::<String>();
-            (!label.is_empty()).then(|| ScheduleField { id: Uuid::new_v4().to_string(), label, value: if value.is_empty() { "미정".into() } else { value } })
+            (!label.is_empty()).then(|| ScheduleField { id: Uuid::new_v4().to_string(), label, value })
         })
         .take(12)
         .collect()
 }
 fn default_schedule_fields(creator: &str, date: Option<&str>, place: Option<&str>) -> Vec<ScheduleFieldInput> {
     vec![
-        ScheduleFieldInput { label: "누구".into(), value: if creator.trim().is_empty() { "미정".into() } else { creator.trim().into() } },
-        ScheduleFieldInput { label: "언제".into(), value: date.unwrap_or("미정").trim().into() },
-        ScheduleFieldInput { label: "어디".into(), value: place.unwrap_or("미정").trim().into() },
+        ScheduleFieldInput { label: "할일".into(), value: String::new() },
+        ScheduleFieldInput { label: "누구".into(), value: creator.trim().into() },
+        ScheduleFieldInput { label: "언제".into(), value: date.unwrap_or("").trim().into() },
+        ScheduleFieldInput { label: "어디".into(), value: place.unwrap_or("").trim().into() },
     ]
 }
 async fn create_appointment(
     State(app): State<App>,
     Json(input): Json<NewAppointment>,
 ) -> Result<Json<Appointment>, StatusCode> {
-    let NewAppointment { title, date, place, fields, creator, source_message_id } = input;
+    let NewAppointment { title, date, place, fields, creator, source_message_id, room_id } = input;
     let title = title.trim();
     if title.is_empty() {
         return Err(StatusCode::BAD_REQUEST);
@@ -876,7 +879,8 @@ async fn create_appointment(
             return Ok(Json(existing.clone()));
         }
     }
-    let appointment = Appointment { id: Uuid::new_v4().to_string(), title: title.chars().take(80).collect(), fields, creator, source_message_id };
+    let room_id = room_id.as_deref().map(str::trim).filter(|id| !id.is_empty()).map(str::to_string);
+    let appointment = Appointment { id: Uuid::new_v4().to_string(), title: title.chars().take(80).collect(), fields, creator, source_message_id, room_id };
     data.appointments.push(appointment.clone());
     Ok(Json(appointment))
 }
