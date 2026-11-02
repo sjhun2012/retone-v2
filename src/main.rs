@@ -1117,7 +1117,9 @@ async fn main() {
         .route("/api/rooms/{id}/members", post(invite_members))
         .route("/api/agreements", post(create_agreement))
         .route("/api/appointments", post(create_appointment))
-        .route("/api/appointments/{id}", delete(delete_appointment))
+        // Keep the previous edit URL available too: a browser with an older
+        // app.js can still save its form while it refreshes to the new UI.
+        .route("/api/appointments/{id}", patch(update_appointment).delete(delete_appointment))
         .route("/api/appointments/{id}/creator/{creator}", patch(update_own_appointment).delete(delete_own_appointment))
         .route("/api/rooms/{id}/messages", get(messages).post(send))
         .route("/api/rooms/{id}/read", post(mark_messages_read))
