@@ -892,6 +892,43 @@ async fn decline_friend_request(
     data.friend_requests.retain(|request| !(request.id == request_id && request.to_id == receiver_id));
     if data.friend_requests.len() < before { StatusCode::NO_CONTENT } else { StatusCode::NOT_FOUND }
 }
+async fn remove_friend(
+    State(app): State<App>,
+    Path((user_id, friend_id)): Path<(Uuid, Uuid)>,
+) -> StatusCode {
+    let mut data = app.data.write().await;
+    let before = data.friendships.len();
+    data.friendships.retain(|friendship| !((friendship.first_id == user_id && friendship.second_id == friend_id) || (friendship.first_id == friend_id && friendship.second_id == user_id)));
+    if data.friendships.len() == before {
+        return StatusCode::NOT_FOUND;
+    }
+    let user_id = user_id.to_string();
+    let friend_id = friend_id.to_string();
+    let removed_room_ids = data.rooms.iter().filter(|room| room.direct_key.is_some() && room.participant_ids.contains(&user_id) && room.participant_ids.contains(&friend_id)).map(|room| room.id.clone()).collect::<Vec<_>>();
+    data.rooms.retain(|room| !removed_room_ids.contains(&room.id));
+    data.messages.retain(|message| !removed_room_ids.contains(&message.room_id));
+    StatusCode::NO_CONTENT
+}
+async fn leave_room(
+    State(app): State<App>,
+    Path((room_id, user_id)): Path<(String, Uuid)>,
+) -> StatusCode {
+    let mut data = app.data.write().await;
+    let Some(index) = data.rooms.iter().position(|room| room.id == room_id && room.participant_ids.contains(&user_id.to_string())) else {
+        return StatusCode::NOT_FOUND;
+    };
+    if data.rooms[index].direct_key.is_some() {
+        data.rooms.remove(index);
+        data.messages.retain(|message| message.room_id != room_id);
+        return StatusCode::NO_CONTENT;
+    }
+    let name = data.users.iter().find(|user| user.id == user_id).map(|user| user.name.clone()).unwrap_or_default();
+    let room = &mut data.rooms[index];
+    room.participant_ids.retain(|member_id| member_id != &user_id.to_string());
+    room.participant_names.retain(|member| member != &name);
+    room.members = room.participant_ids.len().min(u8::MAX as usize) as u8;
+    StatusCode::NO_CONTENT
+}
 async fn bootstrap(State(app): State<App>) -> Json<DataOut> {
     let d = app.data.read().await;
     Json(DataOut {
@@ -1236,6 +1273,7 @@ async fn main() {
         .route("/api/friend-requests", post(create_friend_request))
         .route("/api/friend-requests/{request_id}/accept/{receiver_id}", post(accept_friend_request))
         .route("/api/friend-requests/{request_id}/decline/{receiver_id}", delete(decline_friend_request))
+        .route("/api/friends/{user_id}/remove/{friend_id}", delete(remove_friend))
         .route("/api/ai/check", post(ai_check))
         .route("/api/ai/rewrite", post(ai_rewrite))
         .route("/api/ai/schedule", post(ai_schedule))
@@ -1244,6 +1282,7 @@ async fn main() {
         .route("/api/bootstrap", get(bootstrap))
         .route("/api/rooms", post(create_room))
         .route("/api/rooms/{id}/members", post(invite_members))
+        .route("/api/rooms/{room_id}/leave/{user_id}", delete(leave_room))
         .route("/api/agreements", post(create_agreement))
         .route("/api/appointments", post(create_appointment))
         // Keep the previous edit URL available too: a browser with an older
