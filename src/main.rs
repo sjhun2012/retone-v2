@@ -26,6 +26,7 @@ struct Room {
     last: String,
     updated: i64,
     participant_names: Vec<String>,
+    participant_ids: Vec<String>,
     direct_key: Option<String>,
     direct_member_names: Option<Vec<String>>,
 }
@@ -83,6 +84,19 @@ struct Data {
     messages: Vec<Message>,
     agreements: Vec<Agreement>,
     appointments: Vec<Appointment>,
+    friend_requests: Vec<FriendRequest>,
+    friendships: Vec<Friendship>,
+}
+#[derive(Clone)]
+struct FriendRequest {
+    id: String,
+    from_id: Uuid,
+    to_id: Uuid,
+}
+#[derive(Clone)]
+struct Friendship {
+    first_id: Uuid,
+    second_id: Uuid,
 }
 #[derive(Clone)]
 struct App {
@@ -100,6 +114,18 @@ struct NewRoom {
     members: Option<Vec<String>>,
     direct_key: Option<String>,
     owner: Option<String>,
+    owner_id: Option<String>,
+    member_ids: Option<Vec<String>>,
+}
+#[derive(Deserialize)]
+struct FriendRequestInput {
+    sender_id: Uuid,
+    phone: String,
+}
+#[derive(Serialize)]
+struct FriendRequestOut {
+    id: String,
+    user: PublicUser,
 }
 #[derive(Deserialize)]
 struct InviteMembers {
@@ -174,7 +200,7 @@ struct AvatarUpdate {
 struct StatusUpdate {
     status_message: String,
 }
-#[derive(Serialize)]
+#[derive(Clone, Serialize)]
 struct PublicUser {
     id: String,
     name: String,
@@ -211,6 +237,12 @@ fn user_out(
         status_message,
         ai_intervention,
     }
+}
+fn are_friends(friendships: &[Friendship], first: Uuid, second: Uuid) -> bool {
+    friendships.iter().any(|friendship| {
+        (friendship.first_id == first && friendship.second_id == second)
+            || (friendship.first_id == second && friendship.second_id == first)
+    })
 }
 
 async fn health() -> Json<serde_json::Value> {
@@ -351,9 +383,16 @@ async fn delete_account(State(app): State<App>, Path(id): Path<Uuid>) -> StatusC
         }
     } else {
         let mut data = app.data.write().await;
-        let before = data.users.len();
+        let Some(name) = data.users.iter().find(|user| user.id == id).map(|user| user.name.clone()) else {
+            return StatusCode::NOT_FOUND;
+        };
         data.users.retain(|user| user.id != id);
-        if data.users.len() < before { StatusCode::NO_CONTENT } else { StatusCode::NOT_FOUND }
+        data.friend_requests.retain(|request| request.from_id != id && request.to_id != id);
+        data.friendships.retain(|friendship| friendship.first_id != id && friendship.second_id != id);
+        let removed_room_ids = data.rooms.iter().filter(|room| room.participant_ids.iter().any(|member_id| member_id == &id.to_string()) || room.direct_member_names.as_ref().is_some_and(|names| names.contains(&name))).map(|room| room.id.clone()).collect::<Vec<_>>();
+        data.rooms.retain(|room| !removed_room_ids.contains(&room.id));
+        data.messages.retain(|message| !removed_room_ids.contains(&message.room_id));
+        StatusCode::NO_CONTENT
     }
 }
 async fn ai_check(State(app): State<App>, Json(input): Json<AiCheck>) -> Json<serde_json::Value> {
@@ -668,7 +707,7 @@ async fn ai_schedule(Json(input): Json<ScheduleCheck>) -> Json<serde_json::Value
     if arrival_chase && !planning_signal {
         return Json(serde_json::json!({"is_schedule":false}));
     }
-    let explicit_invitation = ["만나자", "만날래", "만나자고", "여행가자", "놀러가자", "놀자", "같이가자"]
+    let explicit_invitation = ["만나자", "만날래", "만나자고", "여행가자", "놀러가자", "놀자", "같이가자", "가자", "캠프가"]
         .iter()
         .any(|phrase| compact.contains(phrase));
     let future_hint = ["내일", "모레", "다음주", "이번주"]
@@ -677,14 +716,17 @@ async fn ai_schedule(Json(input): Json<ScheduleCheck>) -> Json<serde_json::Value
         .map(|phrase| (*phrase).to_string());
     if explicit_invitation && future_hint.is_some() {
         let task = if compact.contains("여행") { "여행" } else if compact.contains("놀") { "함께 놀기" } else { "만나기" };
+        let tokens = text.split_whitespace().collect::<Vec<_>>();
+        let when = tokens.iter().filter(|token| token.contains("내일") || token.contains("모레") || token.contains("다음주") || token.contains("이번주") || token.contains("오전") || token.contains("오후") || token.contains('시')).copied().collect::<Vec<_>>().join(" ");
+        let place = tokens.iter().find_map(|token| token.strip_suffix("에서").or_else(|| token.strip_suffix("으로")).or_else(|| token.strip_suffix("로")).filter(|value| !value.is_empty())).unwrap_or_default().trim_matches(|c: char| !c.is_alphanumeric() && !('가'..='힣').contains(&c)).to_string();
         return Json(serde_json::json!({
             "is_schedule":true,
             "title":"일정",
             "fields":[
                 {"label":"할일","value":task},
                 {"label":"누구","value":""},
-                {"label":"언제","value":future_hint.unwrap_or_default()},
-                {"label":"어디","value":""}
+                {"label":"언제","value":if when.is_empty() { future_hint.unwrap_or_default() } else { when }},
+                {"label":"어디","value":place}
             ]
         }));
     }
@@ -784,6 +826,71 @@ async fn report_ai(
         sqlx::query("INSERT INTO retone_v2.ai_reports(id,reporter_name,original_text,ai_result) VALUES($1,$2,$3,$4)").bind(Uuid::new_v4()).bind(input.reporter_name.trim()).bind(input.original_text.trim()).bind(input.ai_result).execute(db).await.map_err(|_|StatusCode::INTERNAL_SERVER_ERROR)?;
     }
     Ok(Json(serde_json::json!({"ok":true})))
+}
+async fn friends_for_user(
+    State(app): State<App>,
+    Path(id): Path<Uuid>,
+) -> Result<Json<Vec<PublicUser>>, StatusCode> {
+    let data = app.data.read().await;
+    if !data.users.iter().any(|user| user.id == id) {
+        return Err(StatusCode::NOT_FOUND);
+    }
+    let friend_ids = data.friendships.iter().filter_map(|friendship| {
+        if friendship.first_id == id { Some(friendship.second_id) }
+        else if friendship.second_id == id { Some(friendship.first_id) }
+        else { None }
+    }).collect::<Vec<_>>();
+    Ok(Json(data.users.iter().filter(|user| friend_ids.contains(&user.id)).map(|user| user_out(user.id, user.name.clone(), user.avatar_url.clone(), user.status_message.clone(), user.ai_intervention.clone())).collect()))
+}
+async fn incoming_friend_requests(
+    State(app): State<App>,
+    Path(id): Path<Uuid>,
+) -> Result<Json<Vec<FriendRequestOut>>, StatusCode> {
+    let data = app.data.read().await;
+    if !data.users.iter().any(|user| user.id == id) {
+        return Err(StatusCode::NOT_FOUND);
+    }
+    Ok(Json(data.friend_requests.iter().filter(|request| request.to_id == id).filter_map(|request| {
+        let user = data.users.iter().find(|user| user.id == request.from_id)?;
+        Some(FriendRequestOut { id: request.id.clone(), user: user_out(user.id, user.name.clone(), user.avatar_url.clone(), user.status_message.clone(), user.ai_intervention.clone()) })
+    }).collect()))
+}
+async fn create_friend_request(
+    State(app): State<App>,
+    Json(input): Json<FriendRequestInput>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    let mut data = app.data.write().await;
+    let target_phone = phone_hash(&input.phone);
+    let target = data.users.iter().find(|user| user.phone_hash == target_phone).map(|user| user.id).ok_or(StatusCode::NOT_FOUND)?;
+    if target == input.sender_id || !data.users.iter().any(|user| user.id == input.sender_id) {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+    if are_friends(&data.friendships, input.sender_id, target) || data.friend_requests.iter().any(|request| (request.from_id == input.sender_id && request.to_id == target) || (request.from_id == target && request.to_id == input.sender_id)) {
+        return Err(StatusCode::CONFLICT);
+    }
+    data.friend_requests.push(FriendRequest { id: Uuid::new_v4().to_string(), from_id: input.sender_id, to_id: target });
+    Ok(Json(serde_json::json!({"ok":true})))
+}
+async fn accept_friend_request(
+    State(app): State<App>,
+    Path((request_id, receiver_id)): Path<(String, Uuid)>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    let mut data = app.data.write().await;
+    let index = data.friend_requests.iter().position(|request| request.id == request_id && request.to_id == receiver_id).ok_or(StatusCode::NOT_FOUND)?;
+    let request = data.friend_requests.remove(index);
+    if !are_friends(&data.friendships, request.from_id, request.to_id) {
+        data.friendships.push(Friendship { first_id: request.from_id, second_id: request.to_id });
+    }
+    Ok(Json(serde_json::json!({"ok":true})))
+}
+async fn decline_friend_request(
+    State(app): State<App>,
+    Path((request_id, receiver_id)): Path<(String, Uuid)>,
+) -> StatusCode {
+    let mut data = app.data.write().await;
+    let before = data.friend_requests.len();
+    data.friend_requests.retain(|request| !(request.id == request_id && request.to_id == receiver_id));
+    if data.friend_requests.len() < before { StatusCode::NO_CONTENT } else { StatusCode::NOT_FOUND }
 }
 async fn bootstrap(State(app): State<App>) -> Json<DataOut> {
     let d = app.data.read().await;
@@ -892,6 +999,13 @@ async fn create_room(
         .filter(|key| !key.is_empty())
         .map(|key| key.chars().take(100).collect::<String>());
     let owner = input.owner.as_deref().unwrap_or("").trim().chars().take(24).collect::<String>();
+    let owner_id = input.owner_id.as_deref().and_then(|id| Uuid::parse_str(id.trim()).ok());
+    let mut participant_ids = input.member_ids.unwrap_or_default().into_iter().filter_map(|id| Uuid::parse_str(id.trim()).ok()).collect::<Vec<_>>();
+    if let Some(owner_id) = owner_id {
+        if !participant_ids.contains(&owner_id) {
+            participant_ids.push(owner_id);
+        }
+    }
     let mut participant_names = Vec::new();
     for member in input.members.unwrap_or_default() {
         let member = member.trim().chars().take(24).collect::<String>();
@@ -912,6 +1026,13 @@ async fn create_room(
         names
     });
     let mut data = app.data.write().await;
+    if direct_key.is_some() {
+        let Some(owner_id) = owner_id else { return Err(StatusCode::BAD_REQUEST) };
+        let friend_ids = participant_ids.iter().copied().filter(|id| *id != owner_id).collect::<Vec<_>>();
+        if friend_ids.len() != 1 || !are_friends(&data.friendships, owner_id, friend_ids[0]) {
+            return Err(StatusCode::FORBIDDEN);
+        }
+    }
     if let Some(key) = &direct_key {
         if let Some(room) = data
             .rooms
@@ -930,6 +1051,7 @@ async fn create_room(
         last: "새 대화를 시작해 보세요.".into(),
         updated: Utc::now().timestamp_millis(),
         participant_names,
+        participant_ids: participant_ids.into_iter().map(|id| id.to_string()).collect(),
         direct_key,
         direct_member_names,
     };
@@ -1096,6 +1218,8 @@ async fn main() {
             messages: vec![],
             agreements: vec![],
             appointments: vec![],
+            friend_requests: vec![],
+            friendships: vec![],
         })),
     };
     let router = Router::new()
@@ -1107,6 +1231,11 @@ async fn main() {
         .route("/api/users/{id}/avatar", patch(update_avatar))
         .route("/api/users/{id}/status", patch(update_status))
         .route("/api/users/{id}", delete(delete_account))
+        .route("/api/friends/{id}", get(friends_for_user))
+        .route("/api/friends/{id}/requests", get(incoming_friend_requests))
+        .route("/api/friend-requests", post(create_friend_request))
+        .route("/api/friend-requests/{request_id}/accept/{receiver_id}", post(accept_friend_request))
+        .route("/api/friend-requests/{request_id}/decline/{receiver_id}", delete(decline_friend_request))
         .route("/api/ai/check", post(ai_check))
         .route("/api/ai/rewrite", post(ai_rewrite))
         .route("/api/ai/schedule", post(ai_schedule))
