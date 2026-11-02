@@ -357,7 +357,9 @@ async function saveAppointmentEdit(id){
   if(!title)return alert('일정 제목을 입력해 주세요.');
   try{
     await api(`/api/appointments/${id}/creator/${encodeURIComponent(signedIn)}`,{method:'PATCH',body:JSON.stringify({title,fields:scheduleDraftFields})});
-    data=await api('/api/bootstrap');closePopup();
+    data=await api('/api/bootstrap');
+    alert('저장되었습니다.');
+    closePopup();
     if(roomId)await openRoom(roomId);else await home();
   }catch{alert('일정을 수정하지 못했어요. 만든 사람만 수정할 수 있어요.')}
 }
