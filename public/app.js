@@ -345,6 +345,36 @@ function roomScheduleNotice(room){
   const latest=appointments[0],summary=scheduleNoticeFields(latest),own=latest.creator===signedIn;
   return `<aside class="room-notice" data-schedule-signature="${esc(appointments.map(item=>item.id).join('|'))}"><span class="notice-pin">📌</span><button class="notice-main" onclick="editAppointment('${latest.id}')"><b>${esc(latest.title||'일정')}</b><small>${summary||'일정 내용을 확인해 주세요.'}</small></button><button class="notice-view" onclick="showRoomSchedules('${room}')">보기${appointments.length>1?` ${appointments.length}`:''}</button>${own?`<button class="notice-delete" onclick="deleteOwnSchedule('${latest.id}')">삭제</button>`:''}<button class="notice-close" title="내 화면에서 숨기기" onclick="hideScheduleCard('${latest.id}')">×</button></aside>`;
 }
+function editAppointment(id){
+  const appointment=(data?.appointments||[]).find(item=>item.id===id);
+  if(!appointment)return;
+  if(appointment.creator!==signedIn)return alert('이 일정은 만든 사람만 수정할 수 있어요.');
+  scheduleDraftFields=(appointment.fields||[]).map(field=>({label:field.label,value:field.value}));
+  popup(scheduleForm(appointment.title,`saveAppointmentEdit('${id}')`));
+}
+async function saveAppointmentEdit(id){
+  const title=document.querySelector('#appointmentTitle')?.value.trim();
+  if(!title)return alert('일정 제목을 입력해 주세요.');
+  try{
+    await api(`/api/appointments/${id}/creator/${encodeURIComponent(signedIn)}`,{method:'PATCH',body:JSON.stringify({title,fields:scheduleDraftFields})});
+    data=await api('/api/bootstrap');closePopup();
+    if(roomId)await openRoom(roomId);else await home();
+  }catch{alert('일정을 수정하지 못했어요. 만든 사람만 수정할 수 있어요.')}
+}
+function scheduleFieldsMarkup(appointment){return (appointment.fields||[]).map(field=>`<span class="schedule-field"><b>${esc(field.label)}</b><i>${esc(field.value)||'비어 있음'}</i></span>`).join('')}
+function scheduleCard(appointment,chat=false){
+  const own=appointment.creator===signedIn,details=`<strong>${esc(appointment.title||'일정')}</strong>${scheduleFieldsMarkup(appointment)}`;
+  return `<article class="schedule-item ${chat?'chat-schedule-card':''}" data-schedule-id="${appointment.id}"><button class="schedule-cancel" title="내 화면에서 숨기기" onclick="hideScheduleCard('${appointment.id}')">×</button>${own?`<button class="schedule-delete-global" title="모두에게서 일정 삭제" onclick="deleteOwnSchedule('${appointment.id}')">삭제</button>`:''}${own?`<button class="schedule-edit" onclick="editAppointment('${appointment.id}')">${details}</button>`:`<div class="schedule-edit">${details}</div>`}</article>`;
+}
+function roomScheduleNotice(room){
+  const appointments=roomAppointments(room);if(!appointments.length)return '';
+  const latest=appointments[0],summary=scheduleNoticeFields(latest),own=latest.creator===signedIn,contents=`<b>${esc(latest.title||'일정')}</b><small>${summary||'일정 내용을 확인해 주세요.'}</small>`;
+  return `<aside class="room-notice" data-schedule-signature="${esc(appointments.map(item=>item.id).join('|'))}"><span class="notice-pin">📌</span>${own?`<button class="notice-main" onclick="editAppointment('${latest.id}')">${contents}</button>`:`<div class="notice-main">${contents}</div>`}<button class="notice-view" onclick="showRoomSchedules('${room}')">보기${appointments.length>1?` ${appointments.length}`:''}</button>${own?`<button class="notice-delete" onclick="deleteOwnSchedule('${latest.id}')">삭제</button>`:''}<button class="notice-close" title="내 화면에서 숨기기" onclick="hideScheduleCard('${latest.id}')">×</button></aside>`;
+}
+function showRoomSchedules(room){
+  const appointments=roomAppointments(room);
+  popup(`<div class="group-modal schedule-list"><h2>이 채팅방 일정</h2><p>만든 사람은 일정을 눌러 수정할 수 있어요.</p>${appointments.length?appointments.map(item=>`<div class="schedule-list-row"><strong>${esc(item.title||'일정')}</strong><span>${scheduleNoticeFields(item)||'입력된 세부사항이 없어요.'}</span>${item.creator===signedIn?`<button onclick="closePopup();editAppointment('${item.id}')">수정</button>`:''}</div>`).join(''):'<p>표시할 일정이 없어요.</p>'}<button class="quiet schedule-list-close" onclick="closePopup()">닫기</button></div>`);
+}
 async function openRoom(id){
   roomId=id;if(!data)data=await api('/api/bootstrap');const room=data.rooms.find(item=>item.id===id);if(!room)return home();
   await loadUserAvatars();const messages=await api(`/api/rooms/${id}/messages`);roomMessages=messages.slice();await api(`/api/rooms/${id}/read`,{method:'POST',body:JSON.stringify({reader:signedIn})});markMessagesRead(messages);unreadCounts[id]=0;

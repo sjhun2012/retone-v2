@@ -1031,6 +1031,24 @@ async fn update_appointment(
     appointment.fields = schedule_fields(input.fields);
     Ok(Json(appointment.clone()))
 }
+async fn update_own_appointment(
+    State(app): State<App>,
+    Path((id, creator)): Path<(String, String)>,
+    Json(input): Json<UpdateAppointment>,
+) -> Result<Json<Appointment>, StatusCode> {
+    if input.title.trim().is_empty() {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+    let mut data = app.data.write().await;
+    let appointment = data
+        .appointments
+        .iter_mut()
+        .find(|appointment| appointment.id == id && appointment.creator == creator)
+        .ok_or(StatusCode::NOT_FOUND)?;
+    appointment.title = input.title.trim().chars().take(80).collect();
+    appointment.fields = schedule_fields(input.fields);
+    Ok(Json(appointment.clone()))
+}
 async fn delete_appointment(State(app): State<App>, Path(id): Path<String>) -> StatusCode {
     let mut data = app.data.write().await;
     let before = data.appointments.len();
@@ -1099,8 +1117,8 @@ async fn main() {
         .route("/api/rooms/{id}/members", post(invite_members))
         .route("/api/agreements", post(create_agreement))
         .route("/api/appointments", post(create_appointment))
-        .route("/api/appointments/{id}", patch(update_appointment).delete(delete_appointment))
-        .route("/api/appointments/{id}/creator/{creator}", delete(delete_own_appointment))
+        .route("/api/appointments/{id}", delete(delete_appointment))
+        .route("/api/appointments/{id}/creator/{creator}", patch(update_own_appointment).delete(delete_own_appointment))
         .route("/api/rooms/{id}/messages", get(messages).post(send))
         .route("/api/rooms/{id}/read", post(mark_messages_read))
         .route(
