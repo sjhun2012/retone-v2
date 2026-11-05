@@ -1,0 +1,28 @@
+import fs from 'node:fs';
+import vm from 'node:vm';
+import assert from 'node:assert/strict';
+const entries=new Map();
+const storage={getItem:key=>entries.get(key)||null,setItem:(key,value)=>entries.set(key,value),removeItem:key=>entries.delete(key)};
+const context=vm.createContext({sessionStorage:storage,localStorage:storage,document:{querySelector:()=>null},console,setTimeout,clearTimeout,setInterval,clearInterval,crypto:{randomUUID:()=> 'test-id'}});
+let source=fs.readFileSync(new URL('../public/app.js',import.meta.url),'utf8');
+source=source.replace(/\nstart\(\);?\s*$/, '\n');
+vm.runInContext(source,context);
+vm.runInContext(`
+  let rendered='',sent=0;
+  popup=html=>{rendered=html}; removePendingBubble=()=>{};
+  sendApproved=()=>{sent++};
+  pendingSend={body:'テスト'};
+  showCheckResult({verdict:'WARN',suggestion:'<script>警告</script>'});
+`,context);
+assert.match(vm.runInContext('rendered',context),/&lt;script&gt;/);
+vm.runInContext(`rendered=''; showCheckResult({verdict:'PASS',source:'unavailable'});`,context);
+assert.match(vm.runInContext('rendered',context),/AI 점검을 완료하지 못했어요/);
+assert.equal(vm.runInContext('sent',context),0);
+vm.runInContext(`rememberAiResult('unavailable',{verdict:'PASS',source:'unavailable'});`,context);
+assert.equal(vm.runInContext("savedAiResult('unavailable')",context),null);
+vm.runInContext(`rememberAiResult('bad-json',{verdict:'PASS',error:'AI_CHECK_UNAVAILABLE'});`,context);
+assert.equal(vm.runInContext("savedAiResult('bad-json')",context),null);
+vm.runInContext(`rememberAiResult('hello',{verdict:'PASS',source:'ai'});`,context);
+assert.equal(vm.runInContext("savedAiResult('hello').verdict",context),'PASS');
+assert.match(vm.runInContext("aiResultKeyV4('hello')",context),/^v5\|/);
+console.log('Frontend: escaped warning, unavailable choice, failed-cache exclusion, versioned cache passed');
