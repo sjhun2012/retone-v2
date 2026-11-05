@@ -163,8 +163,17 @@ function scheduleProposalMarkup(proposal){return `<div class="schedule-proposal"
 function showScheduleProposal(message,proposal){pendingScheduleProposal={message,proposal};popup(scheduleProposalMarkup(proposal))}
 function dismissScheduleProposal(){pendingScheduleProposal=null;closePopup();document.querySelector('#text')?.focus()}
 async function acceptScheduleProposal(){if(!pendingScheduleProposal)return;const {message,proposal}=pendingScheduleProposal;pendingScheduleProposal=null;const button=document.querySelector('.schedule-proposal .modal-actions button:last-child');if(button){button.disabled=true;button.textContent='만드는 중…'}try{await api('/api/appointments',{method:'POST',body:JSON.stringify({title:proposal.title,fields:proposal.fields,creator:message.sender,source_message_id:message.id,room_id:message.room_id})});data=await api('/api/bootstrap');closePopup();renderRoomScheduleNotice();updateScheduleUi();document.querySelector('#text')?.focus()}catch{if(button){button.disabled=false;button.textContent='일정 카드 쓰기'}alert('일정 카드를 만들지 못했어요. 다시 시도해 주세요.')}}
-async function maybeScheduleFromMessage(message,context){try{let proposal=null;if(schedulePrefetch.text===message.body)proposal=schedulePrefetch.result||(schedulePrefetch.promise?await schedulePrefetch.promise:null);if(!proposal)proposal=await api('/api/ai/schedule',{method:'POST',body:JSON.stringify({text:message.body,sender:message.sender,context})});schedulePrefetch={text:'',result:null,promise:null,timer:null};if(proposal?.is_schedule)showScheduleProposal(message,proposal)}catch{}}
-async function sendChatMessage(room,body){const message=await api(`/api/rooms/${room}/messages`,{method:'POST',body:JSON.stringify({sender:signedIn,body})});const context=[...roomMessages,message].slice(-6).map(item=>`${item.sender}: ${item.body}`);const scheduleTask=maybeScheduleFromMessage(message,context);await openRoom(room);await scheduleTask}
+async function maybeScheduleFromMessage(message,context){
+  try{
+    const previous=context.slice(0,-1);
+    const proposal=await api('/api/ai/schedule',{method:'POST',body:JSON.stringify({text:message.body,sender:message.sender,context:previous})});
+    schedulePrefetch={text:'',result:null,promise:null,timer:null};
+    if(roomId!==message.room_id)return;
+    if(proposal?.is_schedule)showScheduleProposal(message,proposal);
+    else if(proposal?.error)setAiStatus('일정 자동 확인을 완료하지 못했어요. ＋에서 직접 추가할 수 있어요.');
+  }catch{if(roomId===message.room_id)setAiStatus('일정 확인에 실패했어요. ＋에서 직접 추가할 수 있어요.');}
+}
+async function sendChatMessage(room,body){const message=await api(`/api/rooms/${room}/messages`,{method:'POST',body:JSON.stringify({sender:signedIn,body})});const context=[...roomMessages,message].slice(-6).map(item=>`${item.sender}: ${item.body}`);await openRoom(room);await maybeScheduleFromMessage(message,context)}
 async function send(event){event.preventDefault();if(pendingSend)return;const input=document.querySelector('#text'),body=input?.value.trim();if(!body)return;const useApprovedRewrite=Boolean(rewrittenApprovedText)&&body===rewrittenApprovedText;rewrittenApprovedText='';if(useApprovedRewrite){input.value='';input.disabled=true;await sendChatMessage(roomId,body);return}pendingSend={body,room:roomId};input.value='';input.disabled=true;const saved=aiIntervention!=='off'&&!strongExpression(body)&&savedAiResult(body);input.placeholder=aiIntervention==='off'?'메시지를 보내고 있어요…':saved?'이전 확인 결과를 사용해요…':'AI가 확인 중이에요…';addPendingBubble(body);try{showCheckResult(await checkForSend(body))}catch{await sendApproved()}}
 async function rewritePending(){if(!pendingSend)return;const button=document.querySelector('.modal-actions .quiet');if(button){button.disabled=true;button.textContent='표현을 다듬는 중…'}try{const out=await api('/api/ai/rewrite',{method:'POST',body:JSON.stringify({text:pendingSend.body,context:messageContext(),sender:signedIn})});if(out.suggestion){pendingSend.body=out.suggestion;rewrittenApprovedText=out.suggestion.trim();editPendingSend();return}if(button){button.disabled=false;button.textContent='표현 바꾸기'}alert(out.error==='OPENAI_API_KEY_MISSING'?'AI 표현 바꾸기를 사용하려면 Render 환경 변수 OPENAI_API_KEY를 설정해 주세요.':'표현을 바꾸지 못했어요. 잠시 후 다시 시도해 주세요.')}catch{if(button){button.disabled=false;button.textContent='표현 바꾸기'}alert('표현을 바꾸지 못했어요. 네트워크 연결을 확인해 주세요.')}}
 function strongExpression(text){const compact=String(text||'').toLowerCase().replace(/[\s\p{P}\p{S}]/gu,'');return /(시발|씨발|시ㅂ|ㅅㅂ|ㅆㅂ|개새끼|개새|병신|븅신|ㅂㅅ|ㅄ|좆|존나|죽어|죽인다|뒤져|닥쳐|엿먹어|새끼|놈아|년아|지랄|fuck|shit|bitch|asshole)/.test(compact)}
@@ -228,9 +237,15 @@ function showCheckResult(result){
   if(!pendingSend)return;
   pendingSend.result=result;
   const info=result.info||{level:'none',queries:[]};
-  if(result.verdict==='WARN'){
+  if(result.error || result.source==='unavailable'){
     removePendingBubble();
-    popup(`<div class="ai-check warn"><span>Re:Tone의 제안</span><h2>이렇게 들릴 수도 있어요</h2><p>이 표현은 상대에게 공격적이거나 위협적으로 들릴 수 있어요. 표현을 다듬거나 그대로 보낼 수 있어요.</p><small>Re:Tone은 문장을 판단하거나 막지 않아요. 선택은 언제나 나에게 있어요.</small><div class="modal-actions"><button class="quiet" onclick="rewritePending()">AI로 표현 바꾸기</button><button onclick="sendApproved()">이대로 보내기</button></div></div>`);
+    popup(`<div class="ai-check info"><h2>AI 점검을 완료하지 못했어요</h2><p>내용을 직접 확인한 뒤 전송 여부를 선택해 주세요.</p><div class="modal-actions"><button class="quiet" onclick="editPendingSend()">다시 확인하기</button><button onclick="sendApproved()">이대로 보내기</button></div></div>`);
+    return;
+  }
+  if(result.verdict==='WARN'){
+
+    removePendingBubble();
+    popup(`<div class="ai-check warn"><span>Re:Tone의 제안</span><h2>이렇게 들릴 수도 있어요</h2><p>${esc(result.suggestion||'이 표현은 상대에게 공격적이거나 위협적으로 들릴 수 있어요. 표현을 다듬거나 그대로 보낼 수 있어요.')}</p><small>Re:Tone은 문장을 판단하거나 막지 않아요. 선택은 언제나 나에게 있어요.</small><div class="modal-actions"><button class="quiet" onclick="rewritePending()">AI로 표현 바꾸기</button><button onclick="sendApproved()">이대로 보내기</button></div></div>`);
     return;
   }
   if(info.level==='check'){
@@ -258,14 +273,15 @@ async function send(event){
     if(pendingSend!==next)return;
     showCheckResult(result);
   }catch{
-    if(pendingSend===next)await sendApproved();
+    if(pendingSend===next)showCheckResult({error:'AI_CHECK_UNAVAILABLE',source:'unavailable'});
   }
 }
 // Old preview results were made while the conversation was included in the
 // request. Never reuse them after switching to current-message-only checks.
-function aiResultKeyV4(text){return `v4|${aiIntervention}|${String(text||'').trim().toLowerCase()}`}
+function aiResultKeyV4(text){return `v5|${aiIntervention}|${String(text||'').trim().toLowerCase()}`}
 function savedAiResult(text){return aiSavedResults[aiResultKeyV4(text)]||null}
 function rememberAiResult(text,result){
+  if(!result || result.error || ["unavailable","fallback"].includes(result.source))return;
   const key=aiResultKeyV4(text);
   aiSavedResults[key]={...result,source:'saved'};
   const keys=Object.keys(aiSavedResults);
@@ -433,3 +449,4 @@ function toggleRoomMute(){if(!roomId)return;if(roomIsMuted(roomId))localStorage.
 async function leaveCurrentRoom(){if(!roomId||!confirm('이 채팅방에서 나갈까요? 나간 뒤에는 이전 대화를 볼 수 없어요.'))return;try{await api(`/api/rooms/${roomId}/leave/${signedInId}`,{method:'DELETE'});closePopup();data=await api('/api/bootstrap');home()}catch{alert('채팅방에서 나가지 못했어요.')}}
 async function openRoom(id){roomId=id;if(!data)data=await api('/api/bootstrap');const room=data.rooms.find(item=>item.id===id);if(!room||!accessibleRooms().some(item=>item.id===id))return home();await loadUserAvatars();const messages=await api(`/api/rooms/${id}/messages`);roomMessages=messages.slice();await api(`/api/rooms/${id}/read`,{method:'POST',body:JSON.stringify({reader:signedIn})});markMessagesRead(messages);unreadCounts[id]=0;const title=roomDisplayName(room),names=roomPeople(room).join(', '),profile=userProfilesByName[title],titleMarkup=profile?`<button class="chat-profile-trigger" onclick="showUserProfile('${profile.id}')"><h1>${esc(title)}</h1><span>${esc(names)} · ${room.members}명</span></button>`:`<div class="room-title"><h1>${esc(title)}</h1><span>${esc(names)} · ${room.members}명</span></div>`;app.innerHTML=`<main class="layout android-layout">${rail()}<section class="chat"><header class="head chat-head"><button class="back" onclick="home()">‹</button>${titleMarkup}<div class="chat-actions"><button onclick="inviteFriends()">＋ 초대</button><button onclick="newAgreement()">✓</button><button class="room-more" aria-label="채팅방 메뉴" onclick="roomMenu()">⋯</button></div></header><div class="room-notice-host" id="room-schedule-notice">${roomScheduleNotice(id)}</div><section class="messages" id="messages">${messages.map(view).join('')}${data.agreements.slice(0,1).map(agreement=>`<article class="agreement"><b>✓ 공동 확인 · ${esc(agreement.task)}</b><small>담당 ${esc(agreement.assignee)} · ${esc(agreement.deadline)}</small></article>`).join('')}</section><form class="sendbar" onsubmit="send(event)"><input id="text" placeholder="메시지를 입력하세요" autocomplete="off" oninput="handleChatInput(this.value)"><span id="ai-status" class="ai-status"></span><button aria-label="보내기">↑</button></form></section></main>`;const list=document.querySelector('#messages');list.scrollTop=list.scrollHeight;document.querySelector('#text')?.focus();updateUnreadUi();startInboxPolling();startFriendRequestPolling()}
 start();
+
