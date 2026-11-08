@@ -7,7 +7,11 @@ pub fn compact(text: &str) -> String {
 
 pub fn strong_expression(text: &str) -> Option<&'static str> {
     let lower = text.to_lowercase();
-    let educational = ["이라는 말은 쓰면 안", "라는 말은 쓰면 안", "이라는 욕설", "욕설의 뜻", "욕설을 사용하지"].iter().any(|s| lower.contains(s));
+    let educational = [
+        "단어의 뜻", "표현의 뜻", "욕설의 뜻", "비속어의 뜻", "무슨 뜻",
+        "무슨 의미", "욕설인지", "욕인지", "비속어인지", "표현인지",
+        "말은 쓰면 안", "말을 쓰면 안", "표현을 쓰면 안", "욕설을 사용하지",
+    ].iter().any(|s| lower.contains(s));
     if educational { return None; }
     let words: Vec<String> = lower.split(|c: char| !c.is_alphanumeric() && !(('\u{3131}'..='\u{318e}').contains(&c))).filter(|s| !s.is_empty()).map(str::to_string).collect();
     let bad = ["시발", "씨발", "시ㅂ", "ㅅㅂ", "ㅆㅂ", "개새끼", "개새", "병신", "븅신", "ㅂㅅ", "ㅄ", "좆", "ㅈㄴ", "존나", "미친놈", "미친년", "꺼져", "죽어", "죽인다", "뒤져", "닥쳐", "엿먹어", "새끼", "년아", "놈아", "씹", "지랄", "ㅈㄹ", "ㅁㅊ", "fuck", "shit", "bitch", "asshole"];
@@ -34,7 +38,7 @@ pub fn strong_expression(text: &str) -> Option<&'static str> {
 
 pub fn hostility(text: &str) -> Option<&'static str> {
     let t = compact(text);
-    if ["가만안둬", "가만안둔다", "가만두지않", "죽여버", "죽여버릴", "찾아가서때", "패버"].iter().any(|s| t.contains(s)) { return Some("위협"); }
+    if ["가만안둬", "가만안둔다", "가만두지않", "죽여버", "죽여버릴", "찾아가서때", "패버", "반드시후회하게해줄", "후회하게만들어줄", "끝장내버릴"].iter().any(|s| t.contains(s)) { return Some("위협"); }
     if ["무능한인간", "쓸모없는인간", "쓸모없어", "팀에서빠져", "이것도못하면서", "월급은꼬박", "네생각만하잖", "니생각만하잖"].iter().any(|s| t.contains(s)) { return Some("비난·비꼼"); }
     None
 }
@@ -109,11 +113,11 @@ pub fn local_plan(text: &str, context: &[String]) -> Option<Plan> {
 mod tests {
     use super::*;
     #[test] fn boundaries_and_obfuscation() {
-        for text in ["혹시 발표 자료 좀 도와줄 수 있어?", "시발점에서 출발하자", "이것은 bullshitake 버섯", "욕설인 병신이라는 말은 쓰면 안 돼"] { assert_eq!(strong_expression(text), None, "{text}"); }
+        for text in ["혹시 발표 자료 좀 도와줄 수 있어?", "시발점에서 출발하자", "이것은 bullshitake 버섯", "욕설인 병신이라는 말은 쓰면 안 돼", "병신이라는 단어의 뜻을 설명해줘", "시발은 무슨 의미야?", "이 표현이 욕설인지 궁금해"] { assert_eq!(strong_expression(text), None, "{text}"); }
         for text in ["너 진짜 병신이냐?", "씨발 꺼져", "ㅅㅂ 너 뭐하냐 ㅂㅅ아", "시 발 너 진짜 병 신이네", "fuck you"] { assert!(strong_expression(text).is_some(), "{text}"); }
     }
     #[test] fn attacks_and_emotions() {
-        for text in ["너처럼 무능한 인간은 팀에서 빠져", "이것도 못하면서 월급은 꼬박 받네", "한 번만 더 그러면 가만 안 둔다", "너는 맨날 네 생각만 하잖아"] { assert!(hostility(text).is_some(), "{text}"); }
+        for text in ["너처럼 무능한 인간은 팀에서 빠져", "이것도 못하면서 월급은 꼬박 받네", "한 번만 더 그러면 가만 안 둔다", "두고 봐, 반드시 후회하게 해줄게", "너는 맨날 네 생각만 하잖아"] { assert!(hostility(text).is_some(), "{text}"); }
         for text in ["많이 서운했어", "내 의견은 달라", "그 결과에 동의하기 어려워"] { assert_eq!(hostility(text), None); }
     }
     #[test] fn requests_and_non_plans() {
