@@ -1,3 +1,5 @@
+mod ai_rules;
+mod ai_transport;
 use argon2::{Argon2, PasswordHash, PasswordHasher, PasswordVerifier};
 use axum::{
     Json, Router,
@@ -494,54 +496,15 @@ async fn ai_check(State(app): State<App>, Json(input): Json<AiCheck>) -> Json<se
         "수고하세요",
         "파이팅",
     ];
-    let bad = [
-        "시발",
-        "씨발",
-        "시ㅂ",
-        "ㅅㅂ",
-        "ㅆㅂ",
-        "개새끼",
-        "개새",
-        "병신",
-        "븅신",
-        "ㅂㅅ",
-        "ㅄ",
-        "좆",
-        "ㅈㄴ",
-        "존나",
-        "미친놈",
-        "미친년",
-        "꺼져",
-        "죽어",
-        "죽인다",
-        "뒤져",
-        "닥쳐",
-        "엿먹어",
-        "새끼",
-        "년아",
-        "놈아",
-        "씹",
-        "지랄",
-        "ㅈㄹ",
-        "ㅁㅊ",
-        "fuck",
-        "shit",
-        "bitch",
-        "asshole",
-    ];
     if level == "off" || text.is_empty() || pass.iter().any(|p| text == *p || normalized == *p) {
         return Json(
             serde_json::json!({"verdict":"PASS","suggestion":null,"info":{"level":"none","note":null,"queries":[]},"source":"fast"}),
         );
     }
-    if bad.iter().any(|p| normalized.contains(p)) {
-        let matched = bad
-            .iter()
-            .find(|p| normalized.contains(**p))
-            .unwrap_or(&"강한 표현");
-        return Json(
-            serde_json::json!({"verdict":"WARN","suggestion":format!("‘{matched}’처럼 강도가 높은 표현은 상대가 내용보다 공격받는 느낌을 먼저 받을 수 있어요. 하고 싶은 요청이나 감정을 구체적으로 말해보면 어떨까요?"),"info":{"level":"none","note":null,"queries":[]},"source":"dictionary"}),
-        );
+    let attack = ai_rules::strong_expression(text).map(|term| (term, "dictionary"))
+        .or_else(|| if level != "light" { ai_rules::hostility(text).map(|term| (term, "rules")) } else { None });
+    if let Some((matched, source)) = attack {
+        return Json(serde_json::json!({"verdict":"WARN","suggestion":format!("‘{matched}’ 표현은 상대에게 공격적으로 들릴 수 있어요. 감정이나 원하는 행동을 구체적으로 말해볼까요?"),"info":{"level":"none","note":null,"queries":[]},"source":source}));
     }
     if level == "light" {
         return Json(
@@ -550,36 +513,23 @@ async fn ai_check(State(app): State<App>, Json(input): Json<AiCheck>) -> Json<se
     }
     let hash = format!(
         "{:x}",
-        Sha256::digest(format!("v2:{level}:{normalized}").as_bytes())
+        Sha256::digest(format!("v5:{level}:{text}:{sender}:{context}").as_bytes())
     );
     if let Some(db) = &app.db {
         if let Ok(Some((verdict,suggestion,info_level,info_note,info_queries)))=sqlx::query_as::<_,(String,Option<String>,String,Option<String>,Vec<String>)>("SELECT verdict,suggestion,info_level,info_note,info_queries FROM retone_v2.ai_cache WHERE message_hash=$1").bind(&hash).fetch_optional(db).await{return Json(serde_json::json!({"verdict":verdict,"suggestion":suggestion,"info":{"level":info_level,"note":info_note,"queries":info_queries},"source":"cache"}));}
     }
-    let Some(key) = env::var("OPENAI_API_KEY").ok() else {
+    let Some(_key) = env::var("OPENAI_API_KEY").ok() else {
         return Json(
-            serde_json::json!({"verdict":"PASS","suggestion":null,"info":{"level":"none","note":null,"queries":[]},"source":"unavailable"}),
+            serde_json::json!({"verdict":"PASS","suggestion":null,"info":{"level":"none","note":null,"queries":[]},"source":"unavailable","error":"AI_CHECK_UNAVAILABLE"}),
         );
     };
     let prompt = format!(
         "너는 Re:Tone의 대화 거울이다. 판정자·검열자·사실확인 기관이 아니다. 현재 문장을 오직 '이렇게 들릴 수도 있어요'라는 제안으로만 비춘다.\n현재 문장은 반드시 '{sender}'가 작성했다. 최근 대화는 화자 이름과 함께 주어지며, 이름을 바꾸거나 상대가 하지 않은 행동을 만들지 마라.\n1) 심한 욕설·위협·명백한 조롱뿐 아니라, 비꼼·냉소·돌려 말하는 압박·상대를 작게 만드는 표현도 알아차린다. 친한 사이의 가벼운 농담은 WARN하지 않는다.\n2) WARN일 때 suggestion은 반드시 이 문장에 맞춰 두 문장으로 쓴다. 첫 문장은 실제 문제 지점(단어·어조·비꼼)을 따옴표로 구체적으로 짚고 왜 상대가 압박·비난·조롱으로 느낄 수 있는지 설명한다. 둘째 문장은 원래 의도를 살린 짧은 대체 표현을 제안한다. 최근 대화 맥락이 있다면 갈등의 원인과 사용자의 바람을 살리되, 맥락에 없는 사실을 만들지 마라.\n3) 정보 점검: 건강·안전·법·돈·정치·재난·통계·속보성 주장에 출처·날짜·원문이 빠졌다면 info.level=check. 진실·거짓을 판단하지 말고 출처와 날짜 확인을 제안한다.\n4) 현재 개입 강도는 {level}이다. standard는 뚜렷한 경우만, careful은 비꼼·오해 가능성까지 조금 더 꼼꼼히 본다.\n5) JSON만 출력: {{\"verdict\":\"PASS|WARN\",\"suggestion\":string|null,\"info\":{{\"level\":\"none|check\",\"note\":string|null,\"queries\":[string]}}}}. queries는 확인할 검색어 0~2개.\n최근 대화(없으면 무시):\n{context}\n현재 문장({sender} 작성): {text}"
     );
-    let res = reqwest::Client::new()
-        .post("https://api.openai.com/v1/responses")
-        .bearer_auth(key)
-        .json(&serde_json::json!({"model":"gpt-4o-mini","input":prompt,"max_output_tokens":80}))
-        .send()
-        .await;
-    let Ok(r) = res else {
-        return Json(
-            serde_json::json!({"verdict":"PASS","suggestion":null,"info":{"level":"none","note":null,"queries":[]},"source":"fallback"}),
-        );
+    let parsed = match ai_transport::json_response(&prompt, ai_transport::check_schema(), 700).await {
+        Some(value) if matches!(value["verdict"].as_str(), Some("PASS" | "WARN")) => value,
+        _ => return Json(serde_json::json!({"verdict":"PASS","suggestion":null,"info":{"level":"none","note":null,"queries":[]},"source":"unavailable","error":"AI_CHECK_UNAVAILABLE"})),
     };
-    let v = r.json::<serde_json::Value>().await.unwrap_or_default();
-    let out = v["output"][0]["content"][0]["text"]
-        .as_str()
-        .unwrap_or("{}");
-    let parsed = serde_json::from_str::<serde_json::Value>(out)
-        .unwrap_or_else(|_| serde_json::json!({"verdict":"PASS","suggestion":null,"info":{"level":"none","note":null,"queries":[]}}));
     let verdict = parsed["verdict"].as_str().unwrap_or("PASS");
     let suggestion = parsed["suggestion"].as_str();
     let info_level = parsed["info"]["level"].as_str().unwrap_or("none");
@@ -650,85 +600,28 @@ async fn ai_rewrite(Json(input): Json<RewriteRequest>) -> Json<serde_json::Value
             return Json(serde_json::json!({"suggestion":suggestion,"error":""}));
         }
     }
-    let Some(key) = env::var("OPENAI_API_KEY").ok() else {
-        return Json(serde_json::json!({"suggestion":"","error":"OPENAI_API_KEY_MISSING"}));
-    };
     let prompt = format!(
         "다음 채팅을 뜻은 최대한 유지하면서 상대가 덜 공격적으로 들릴 자연스러운 한국어로 바꿔줘. 판정·설명·따옴표 없이 바꾼 문장만 출력.\n중요: 원문은 반드시 '{sender}'가 작성했다. 최근 대화에는 [현재 사용자]와 [상대] 역할표가 있다. 상대의 감정·불만을 현재 사용자의 감정으로 복사하지 마라. 예를 들어 [상대]가 '너 왜 안 와?'라고 했다고 해서 '{sender}'에게 '내가 기대했는데 네가 늦어서 속상해'라고 쓰게 하면 안 된다. 단, 상대가 현재 사용자의 늦음·실수·약속 변경을 구체적으로 지적했고 현재 사용자가 '알빠야?', '니 상관 아니야'처럼 방어적으로 답하려 한다면, 상대의 대사를 흉내 내지 말고 현재 사용자가 책임지는 사과로 바꿔라. 예: '늦어서 미안해. 다음에는 미리 연락할게.' 원문에 있는 욕설도 '{sender}'가 한 말이므로, 그것만 근거로 상대가 욕하거나 잘못했다고 쓰지 마라.\n욕설·인신공격은 완곡한 욕설로 바꾸지 말고, 문장 전체의 요청·질문·상황은 살린 채 화난 감정과 상대에게 바라는 행동을 분명히 말해라. 사실이 부족하면 상대 행동을 지어내지 말고 중립적인 감정과 대화 방식을 말해라. 단어 하나만 바꾸지 마라.\n최근 대화(없으면 무시):\n{context}\n원문({sender} 작성): {text}"
     );
-    let response = reqwest::Client::new()
-        .post("https://api.openai.com/v1/responses")
-        .bearer_auth(key)
-        .json(&serde_json::json!({"model":"gpt-4o-mini","input":prompt,"max_output_tokens":80}))
-        .send()
-        .await;
-    let suggestion = match response {
-        Ok(r) => r
-            .json::<serde_json::Value>()
-            .await
-            .ok()
-            .and_then(|v| {
-                v["output"][0]["content"][0]["text"]
-                    .as_str()
-                    .map(str::trim)
-                    .map(str::to_string)
-            })
-            .unwrap_or_default(),
-        Err(_) => String::new(),
-    };
-    let error = if suggestion.is_empty() {
-        "REWRITE_UNAVAILABLE"
-    } else {
-        ""
-    };
-    Json(serde_json::json!({"suggestion":suggestion,"error":error}))
+    if let Some(suggestion) = ai_transport::text_response(&prompt, 350).await {
+        return Json(serde_json::json!({"suggestion":suggestion,"error":"","source":"ai"}));
+    }
+    if let Some(suggestion) = ai_rules::rewrite_fallback(text, &context) {
+        return Json(serde_json::json!({"suggestion":suggestion,"error":"","source":"rules"}));
+    }
+    Json(serde_json::json!({"suggestion":"","error":"REWRITE_UNAVAILABLE"}))
 }
+
 async fn ai_schedule(Json(input): Json<ScheduleCheck>) -> Json<serde_json::Value> {
     let text = input.text.trim();
-    let compact = text
-        .chars()
-        .filter(|c| !c.is_whitespace() && !c.is_ascii_punctuation())
-        .collect::<String>();
-    // A confirmation is a reply to an existing suggestion, not a new schedule.
-    // Keep this deterministic so the model cannot reopen a schedule proposal on
-    // the other participant's screen just because the earlier context mentions a plan.
-    let acknowledgement = ["ㅇㅋ", "ㅇㅇ", "응", "그래", "알겠어", "알았다", "좋아", "오케이", "okay", "ok", "넵", "네"]
-        .iter()
-        .any(|phrase| compact == *phrase);
-    if acknowledgement {
-        return Json(serde_json::json!({"is_schedule":false}));
+    if ai_rules::schedule_negative(text) {
+        return Json(serde_json::json!({"is_schedule":false,"source":"rules"}));
     }
-    let arrival_chase = ["왜안와", "왜안왔", "빨리와", "어서와", "언제와", "지금와"]
-        .iter()
-        .any(|phrase| compact.contains(phrase));
-    let planning_signal = ["내일", "모레", "다음주", "약속", "만나", "놀자", "가자", "회의", "피피티", "발표", "과제", "숙제", "제출", "까지"]
-        .iter()
-        .any(|phrase| compact.contains(phrase));
-    if arrival_chase && !planning_signal {
-        return Json(serde_json::json!({"is_schedule":false}));
-    }
-    let explicit_invitation = ["만나자", "만날래", "만나자고", "여행가자", "놀러가자", "놀자", "같이가자", "가자", "캠프가"]
-        .iter()
-        .any(|phrase| compact.contains(phrase));
-    let future_hint = ["내일", "모레", "다음주", "이번주"]
-        .iter()
-        .find(|phrase| compact.contains(**phrase))
-        .map(|phrase| (*phrase).to_string());
-    if explicit_invitation && future_hint.is_some() {
-        let task = if compact.contains("여행") { "여행" } else if compact.contains("놀") { "함께 놀기" } else { "만나기" };
-        let tokens = text.split_whitespace().collect::<Vec<_>>();
-        let when = tokens.iter().filter(|token| token.contains("내일") || token.contains("모레") || token.contains("다음주") || token.contains("이번주") || token.contains("오전") || token.contains("오후") || token.contains('시')).copied().collect::<Vec<_>>().join(" ");
-        let place = tokens.iter().find_map(|token| token.strip_suffix("에서").or_else(|| token.strip_suffix("으로")).or_else(|| token.strip_suffix("로")).filter(|value| !value.is_empty())).unwrap_or_default().trim_matches(|c: char| !c.is_alphanumeric() && !('가'..='힣').contains(&c)).to_string();
-        return Json(serde_json::json!({
-            "is_schedule":true,
-            "title":"일정",
-            "fields":[
-                {"label":"할일","value":task},
-                {"label":"누구","value":""},
-                {"label":"언제","value":if when.is_empty() { future_hint.unwrap_or_default() } else { when }},
-                {"label":"어디","value":place}
-            ]
-        }));
+    if let Some(plan) = ai_rules::local_plan(text, input.context.as_deref().unwrap_or(&[])) {
+        return Json(serde_json::json!({"is_schedule":true,"title":"일정","source":"rules","fields":[
+            {"label":"할일","value":plan.task},{"label":"누구","value":plan.who},
+            {"label":"언제","value":plan.when},{"label":"어디","value":plan.place}
+        ]}));
     }
     let context = input
         .context
@@ -739,28 +632,13 @@ async fn ai_schedule(Json(input): Json<ScheduleCheck>) -> Json<serde_json::Value
         .cloned()
         .collect::<Vec<_>>()
         .join("\n");
-    let Some(key) = env::var("OPENAI_API_KEY").ok() else {
-        return Json(serde_json::json!({"is_schedule":false}));
-    };
     let prompt = format!(
-        "너는 채팅에서 새 일정·약속·할 일을 찾는 도우미다. 앞으로 할 일을 제안하거나 확정하는 문장만 true다. 함께 만나거나 놀거나 어디 가자는 새 제안, '피피티 만들어줘', '발표 준비하자', '금요일까지 보고서 내자' 같은 구체적인 할 일 요청은 true다. 이미 진행 중인 약속에서 하는 재촉·항의·상태 확인은 일정이 아니다. '왜 안 와?', '빨리 와', '언제 와?', '지금 8시 30분이잖아'는 절대 false다. 단순 인사·과거 회상·가정도 false다. true라면 JSON만 출력: {{\"is_schedule\":true,\"title\":\"일정\",\"fields\":[{{\"label\":\"할일\",\"value\":string}},{{\"label\":\"누구\",\"value\":string}},{{\"label\":\"언제\",\"value\":string}},{{\"label\":\"어디\",\"value\":string}},...]}}. fields에는 반드시 할일·누구·언제·어디를 이 순서로 포함한다. 알 수 없는 값은 반드시 빈 문자열로 두고 '미정'이나 추측을 쓰지 마라. 예를 들어 '피피티 만들어줘'는 할일='피피티 만들기', 나머지는 빈 문자열이다. '금요일까지 바나나가 피피티 만들어'는 할일='피피티 만들기', 누구='바나나', 언제='금요일', 어디=''다. 필요할 때만 세부사항을 추가한다. false라면 {{\"is_schedule\":false}}만 출력한다.\n보낸 사람: {}\n최근 대화:\n{}\n현재 메시지: {}",
+        "너는 채팅에서 새 일정·약속·할 일을 찾는 도우미다. 앞으로 할 일을 제안하거나 확정하는 문장만 true다. 함께 만나거나 놀거나 어디 가자는 새 제안, '피피티 만들어줘', '발표 준비하자', '금요일까지 보고서 내자' 같은 구체적인 할 일 요청은 true다. 이미 진행 중인 약속에서 하는 재촉·항의·상태 확인은 일정이 아니다. '왜 안 와?', '빨리 와', '언제 와?', '지금 8시 30분이잖아'는 절대 false다. 단순 인사·과거 회상·가정도 false다. true라면 JSON만 출력: {{\"is_schedule\":true,\"title\":\"일정\",\"fields\":[{{\"label\":\"할일\",\"value\":string}},{{\"label\":\"누구\",\"value\":string}},{{\"label\":\"언제\",\"value\":string}},{{\"label\":\"어디\",\"value\":string}},...]}}. fields에는 반드시 할일·누구·언제·어디를 이 순서로 포함한다. 알 수 없는 값은 반드시 빈 문자열로 두고 '미정'이나 추측을 쓰지 마라. 예를 들어 '피피티 만들어줘'는 할일='피피티 만들기', 나머지는 빈 문자열이다. '금요일까지 바나나가 피피티 만들어'는 할일='피피티 만들기', 누구='바나나', 언제='금요일', 어디=''다. 필요할 때만 세부사항을 추가한다. false라면 {{\"is_schedule\":false,\"title\":\"\",\"fields\":[]}}만 출력한다.\n보낸 사람: {}\n최근 대화:\n{}\n현재 메시지: {}",
         input.sender.trim(), context, text
     );
-    let response = reqwest::Client::new()
-        .post("https://api.openai.com/v1/responses")
-        .bearer_auth(key)
-        .json(&serde_json::json!({"model":"gpt-4o-mini","input":prompt,"max_output_tokens":180}))
-        .send()
-        .await;
-    let parsed = match response {
-        Ok(response) => response
-            .json::<serde_json::Value>()
-            .await
-            .ok()
-            .and_then(|value| value["output"][0]["content"][0]["text"].as_str().map(str::to_string))
-            .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok())
-            .unwrap_or_default(),
-        Err(_) => serde_json::Value::Null,
+    let parsed = match ai_transport::json_response(&prompt, ai_transport::schedule_schema(), 700).await {
+        Some(value) if value["is_schedule"].is_boolean() => value,
+        _ => return Json(serde_json::json!({"is_schedule":false,"source":"unavailable","error":"AI_SCHEDULE_UNAVAILABLE"})),
     };
     if !parsed["is_schedule"].as_bool().unwrap_or(false) {
         return Json(serde_json::json!({"is_schedule":false}));
@@ -1307,3 +1185,4 @@ async fn main() {
     println!("Re:Tone v2 on {port}");
     axum::serve(listener, router).await.unwrap();
 }
+
