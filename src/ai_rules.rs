@@ -38,7 +38,12 @@ pub fn strong_expression(text: &str) -> Option<&'static str> {
 
 pub fn hostility(text: &str) -> Option<&'static str> {
     let t = compact(text);
-    if ["가만안둬", "가만안둔다", "가만두지않", "죽여버", "죽여버릴", "찾아가서때", "패버", "반드시후회하게해줄", "후회하게만들어줄", "끝장내버릴"].iter().any(|s| t.contains(s)) { return Some("위협"); }
+    if [
+        "가만안둬", "가만안둔다", "가만두지않", "죽여버", "죽여버릴",
+        "찾아가서때", "패버", "반드시후회하게해줄", "후회하게만들어줄",
+        "끝장내버릴", "다음엔끝장이야", "다음엔끝장이다", "찾아낼거야",
+        "어디있는지찾아", "직접가서혼내줄", "다음에또그러면두고보",
+    ].iter().any(|s| t.contains(s)) { return Some("위협"); }
     if ["무능한인간", "쓸모없는인간", "쓸모없어", "팀에서빠져", "이것도못하면서", "월급은꼬박", "네생각만하잖", "니생각만하잖"].iter().any(|s| t.contains(s)) { return Some("비난·비꼼"); }
     None
 }
@@ -117,7 +122,7 @@ mod tests {
         for text in ["너 진짜 병신이냐?", "씨발 꺼져", "ㅅㅂ 너 뭐하냐 ㅂㅅ아", "시 발 너 진짜 병 신이네", "fuck you"] { assert!(strong_expression(text).is_some(), "{text}"); }
     }
     #[test] fn attacks_and_emotions() {
-        for text in ["너처럼 무능한 인간은 팀에서 빠져", "이것도 못하면서 월급은 꼬박 받네", "한 번만 더 그러면 가만 안 둔다", "두고 봐, 반드시 후회하게 해줄게", "너는 맨날 네 생각만 하잖아"] { assert!(hostility(text).is_some(), "{text}"); }
+        for text in ["너처럼 무능한 인간은 팀에서 빠져", "이것도 못하면서 월급은 꼬박 받네", "한 번만 더 그러면 가만 안 둔다", "두고 봐, 반드시 후회하게 해줄게", "이번엔 넘어가지만 다음엔 끝장이야", "네가 어디 있는지 찾아낼 거야", "내가 직접 가서 혼내줄게", "다음에 또 그러면 두고 보자", "너는 맨날 네 생각만 하잖아"] { assert!(hostility(text).is_some(), "{text}"); }
         for text in ["많이 서운했어", "내 의견은 달라", "그 결과에 동의하기 어려워"] { assert_eq!(hostility(text), None); }
     }
     #[test] fn requests_and_non_plans() {
