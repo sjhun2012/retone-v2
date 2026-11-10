@@ -48,6 +48,17 @@ pub fn hostility(text: &str) -> Option<&'static str> {
     None
 }
 
+pub fn unverified_sensitive_claim(text: &str) -> bool {
+    let t = compact(text);
+    let domain = ["감기", "약을", "약이", "치료", "백신", "투자", "코인", "주식", "계약", "대피", "재난", "지진", "태풍"]
+        .iter().any(|word| t.contains(word));
+    let assertion = ["반드시", "무조건", "모든", "두배", "낫는대", "내려진대", "무효래", "오른대", "된다", "된대", "한대"]
+        .iter().any(|word| t.contains(word)) || text.contains("100%");
+    let addressed = ["너는", "네가", "니가", "넌", "당신", "너한테", "네게"]
+        .iter().any(|word| t.contains(word));
+    domain && assertion && !addressed
+}
+
 pub fn rewrite_fallback(text: &str, context: &str) -> Option<String> {
     let t = compact(text);
     if ["알빠야", "내알바야", "니상관아니야", "네상관아니야"].iter().any(|s| t.contains(s)) && context.contains("[상대]") && ["왜안와", "늦었", "기다렸"].iter().any(|s| compact(context).contains(s)) {
@@ -138,5 +149,13 @@ mod tests {
     #[test] fn rewrites_preserve_request() {
         assert!(rewrite_fallback("너 진짜 병신이냐?", "").is_some());
         assert!(rewrite_fallback("씨발! 내일 3시까지 피피티 만들어줘", "").unwrap().contains("내일 3시까지"));
+    }
+    #[test] fn sensitive_claims_are_not_interpersonal_attacks() {
+        for text in ["이 약을 먹으면 모든 감기가 하루 만에 낫는대", "이 코인은 다음 달에 반드시 두 배가 된대", "미성년자가 서명한 계약은 무조건 다 무효래", "우리 동네에 곧 대피 명령이 내려진대"] {
+            assert!(unverified_sensitive_claim(text), "{text}");
+        }
+        for text in ["약속은 반드시 지키자", "코인 지갑을 잃어버렸어", "너는 이 코인 얘기만 하면서 사람을 무시해"] {
+            assert!(!unverified_sensitive_claim(text), "{text}");
+        }
     }
 }

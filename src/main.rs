@@ -513,7 +513,7 @@ async fn ai_check(State(app): State<App>, Json(input): Json<AiCheck>) -> Json<se
     }
     let hash = format!(
         "{:x}",
-        Sha256::digest(format!("v5:{level}:{text}:{sender}:{context}").as_bytes())
+        Sha256::digest(format!("v6:{level}:{text}:{sender}:{context}").as_bytes())
     );
     if let Some(db) = &app.db {
         if let Ok(Some((verdict,suggestion,info_level,info_note,info_queries)))=sqlx::query_as::<_,(String,Option<String>,String,Option<String>,Vec<String>)>("SELECT verdict,suggestion,info_level,info_note,info_queries FROM retone_v2.ai_cache WHERE message_hash=$1").bind(&hash).fetch_optional(db).await{return Json(serde_json::json!({"verdict":verdict,"suggestion":suggestion,"info":{"level":info_level,"note":info_note,"queries":info_queries},"source":"cache"}));}
@@ -530,10 +530,13 @@ async fn ai_check(State(app): State<App>, Json(input): Json<AiCheck>) -> Json<se
         Some(value) if matches!(value["verdict"].as_str(), Some("PASS" | "WARN")) => value,
         _ => return Json(serde_json::json!({"verdict":"PASS","suggestion":null,"info":{"level":"none","note":null,"queries":[]},"source":"unavailable","error":"AI_CHECK_UNAVAILABLE"})),
     };
-    let verdict = parsed["verdict"].as_str().unwrap_or("PASS");
-    let suggestion = parsed["suggestion"].as_str();
-    let info_level = parsed["info"]["level"].as_str().unwrap_or("none");
-    let info_note = parsed["info"]["note"].as_str();
+    // Factual claims can be returned as WARN by the model even though there is
+    // no person-directed attack. Keep the intervention as a source check.
+    let source_check = ai_rules::unverified_sensitive_claim(text);
+    let verdict = if source_check { "PASS" } else { parsed["verdict"].as_str().unwrap_or("PASS") };
+    let suggestion = if source_check { None } else { parsed["suggestion"].as_str() };
+    let info_level = if source_check { "check" } else { parsed["info"]["level"].as_str().unwrap_or("none") };
+    let info_note = parsed["info"]["note"].as_str().or(if source_check { Some("출처와 발표 날짜를 확인해 주세요.") } else { None });
     let info_queries = parsed["info"]["queries"]
         .as_array()
         .map(|items| {
