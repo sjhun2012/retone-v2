@@ -38,6 +38,7 @@ pub fn strong_expression(text: &str) -> Option<&'static str> {
 
 pub fn hostility(text: &str) -> Option<&'static str> {
     let t = compact(text);
+    if ["너는", "넌", "네가", "니가"].iter().any(|s| t.contains(s)) && t.contains("멍청") { return Some("멍청"); }
     if [
         "가만안둬", "가만안둔다", "가만두지않", "죽여버", "죽여버릴",
         "찾아가서때", "패버", "반드시후회하게해줄", "후회하게만들어줄",
@@ -73,7 +74,7 @@ pub fn rewrite_fallback(text: &str, context: &str) -> Option<String> {
                 return Some(format!("지금은 조금 답답해. {request}"));
             }
         }
-        return Some(if t.contains("꺼져") { "지금은 감정을 가라앉힐 시간이 필요해. 잠시 뒤에 이야기하자." } else if t.contains("생각만") { "내 의견도 함께 들어줬으면 좋겠어. 서로 생각을 차분히 이야기하자." } else { "지금 많이 답답해. 서로 존중하면서 차분히 이야기하고 싶어." }.into());
+        return Some(if t.contains("꺼져") { "지금은 감정을 가라앉힐 시간이 필요해. 잠시 뒤에 이야기하자." } else if t.contains("생각만") { "내 의견도 함께 들어줬으면 좋겠어. 서로 생각을 차분히 이야기하자." } else if t.contains("멍청") { "지금 답답한 마음이 들어. 어떤 부분이 어려웠는지 차분히 이야기하고 싶어." } else { "지금 많이 답답해. 서로 존중하면서 차분히 이야기하고 싶어." }.into());
     }
     None
 }
@@ -133,8 +134,8 @@ mod tests {
         for text in ["너 진짜 병신이냐?", "씨발 꺼져", "ㅅㅂ 너 뭐하냐 ㅂㅅ아", "시 발 너 진짜 병 신이네", "fuck you"] { assert!(strong_expression(text).is_some(), "{text}"); }
     }
     #[test] fn attacks_and_emotions() {
-        for text in ["너처럼 무능한 인간은 팀에서 빠져", "이것도 못하면서 월급은 꼬박 받네", "한 번만 더 그러면 가만 안 둔다", "두고 봐, 반드시 후회하게 해줄게", "이번엔 넘어가지만 다음엔 끝장이야", "네가 어디 있는지 찾아낼 거야", "내가 직접 가서 혼내줄게", "다음에 또 그러면 두고 보자", "너는 맨날 네 생각만 하잖아"] { assert!(hostility(text).is_some(), "{text}"); }
-        for text in ["많이 서운했어", "내 의견은 달라", "그 결과에 동의하기 어려워"] { assert_eq!(hostility(text), None); }
+        for text in ["너처럼 무능한 인간은 팀에서 빠져", "이것도 못하면서 월급은 꼬박 받네", "한 번만 더 그러면 가만 안 둔다", "두고 봐, 반드시 후회하게 해줄게", "이번엔 넘어가지만 다음엔 끝장이야", "네가 어디 있는지 찾아낼 거야", "내가 직접 가서 혼내줄게", "다음에 또 그러면 두고 보자", "너는 맨날 네 생각만 하잖아", "너는 정말 멍청해서 아무것도 못하네"] { assert!(hostility(text).is_some(), "{text}"); }
+        for text in ["많이 서운했어", "내 의견은 달라", "그 결과에 동의하기 어려워", "내가 멍청했네"] { assert_eq!(hostility(text), None); }
     }
     #[test] fn requests_and_non_plans() {
         for text in ["피피티 만들어줘", "민수야 금요일 오후 5시까지 보고서 작성해줘", "회의 자료 정리해서 보내주세요", "혹시 발표 자료 좀 도와줄 수 있어?", "우리 주말에 영화 보러 가자", "내일까지 광합성 발표 자료를 만들어줘", "내일 오후 3시에 회의실에서 발표 준비하자", "다음 주 월요일 오전 10시에 회의합시다", "내일 이야기해도 될까?"] { assert!(local_plan(text, &[]).is_some(), "{text}"); }
@@ -149,6 +150,9 @@ mod tests {
     #[test] fn rewrites_preserve_request() {
         assert!(rewrite_fallback("너 진짜 병신이냐?", "").is_some());
         assert!(rewrite_fallback("씨발! 내일 3시까지 피피티 만들어줘", "").unwrap().contains("내일 3시까지"));
+        let rewritten = rewrite_fallback("너는 정말 멍청해서 아무것도 못하네", "나: 안녕, 오늘 어땠어?").unwrap();
+        assert!(rewritten.contains("답답한 마음"));
+        assert!(!rewritten.contains("안녕"));
     }
     #[test] fn sensitive_claims_are_not_interpersonal_attacks() {
         for text in ["이 약을 먹으면 모든 감기가 하루 만에 낫는대", "이 코인은 다음 달에 반드시 두 배가 된대", "미성년자가 서명한 계약은 무조건 다 무효래", "우리 동네에 곧 대피 명령이 내려진대"] {
