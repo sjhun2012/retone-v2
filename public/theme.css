@@ -44,7 +44,7 @@ body { background: #faf9fc; color: var(--text); }
 .sendbar { border-top-color: var(--line); }
 .sendbar input, .modal input, .profile-status input { border-color: #e5dfea; background: #fbfafc; }
 .sendbar input:focus, .modal input:focus, .profile-status input:focus { border-color: #aa96c2; }
-.sendbar button, .modal section > button, .modal-actions button, .auth-submit, .profile-status button { background: #786399; color: #fff; }
+.sendbar button, .modal button, .auth-submit, .profile-status button { background: #786399; color: #fff; }
 .modal { background: #241b31a3; }
 .modal section { border: 1px solid var(--line); border-radius: 18px; box-shadow: 0 20px 55px #2e203626; }
 .modal section, .auth-card { animation: none; }
