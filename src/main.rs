@@ -589,6 +589,13 @@ async fn ai_rewrite(Json(input): Json<RewriteRequest>) -> Json<serde_json::Value
     if dismissive_reply && lateness_complaint {
         return Json(serde_json::json!({"suggestion":"늦어서 미안해. 다음에는 미리 연락할게.","error":""}));
     }
+    // For direct insults, a local rewrite keeps the speaker's intent anchored
+    // when the surrounding conversation is unrelated to the insulting text.
+    if ai_rules::hostility(text) == Some("멍청") {
+        if let Some(suggestion) = ai_rules::rewrite_fallback(text, &context) {
+            return Json(serde_json::json!({"suggestion":suggestion,"error":"","source":"rules"}));
+        }
+    }
     let quick = if compact == "야이나쁜놈아" {
         Some("지금 정말 화가 났어. 그렇게 하지 말아줘.")
     } else if compact == "야이씨발놈아" {
