@@ -1,0 +1,86 @@
+:root {
+  --navy: #f7f5fa;
+  --blue: #786399;
+  --pale: #faf9fc;
+  --line: #e9e5ee;
+  --text: #302b3b;
+  --muted: #817b8b;
+}
+
+body { background: #faf9fc; color: var(--text); }
+.layout { grid-template-columns: 232px minmax(0, 1fr); }
+.rail { padding: 28px 15px 20px; border-right: 1px solid var(--line); color: var(--text); }
+.rail .brand { margin: 0 12px 31px; font-size: 25px; letter-spacing: -1.5px; }
+.brand i, .auth-brand i { color: #8b74ad; }
+.rail p { display: none; }
+.rail nav button { margin: 1px 0; padding: 11px 14px; border-radius: 10px; color: #716b7b; font-weight: 600; }
+.rail nav button:hover { background: #eeebf3; color: #493d5d; transform: none; }
+.rail nav button.active { background: #eae4f1; color: #5b4777; font-weight: 750; }
+.rail nav button.active:before { display: none; }
+.rail small { margin: auto 10px 0; padding: 14px 0 0; border-top-color: var(--line); color: var(--muted); }
+.page, .sendbar, .head { background: #fff; }
+.head { height: 68px; padding: 0 30px; }
+.head h1 { font-size: 19px; letter-spacing: -.35px; }
+.content { width: min(920px, 100%); padding: 12px 30px 28px; }
+.intro { display: none; }
+.dash:empty { display: none; }
+.rooms { border-top: 0; }
+.room { gap: 13px; padding: 15px 5px; border-bottom-color: var(--line); }
+.room:hover { border-radius: 0; background: #faf8fd; transform: none; }
+.room .copy b { color: #302b3b; font-size: 14px; font-weight: 700; }
+.room .copy span { color: var(--muted); font-size: 12px; }
+.avatar, .friend-profile-button, .user-profile-avatar { border-radius: 50%; background: #ece6f4; color: #6b558a; }
+.badge, .nav-badge { background: #8168a4; }
+.empty-chat { padding: 30px 5px; color: #6c588a; }
+.empty-chat:hover { background: transparent; }
+.new-room, .chat-actions button, .back, .friend-request-bell { background: #f1edf6; color: #675181; }
+.new-room:hover { background: #eae3f2; box-shadow: none; }
+.chat { background: #faf9fc; }
+.chat .head { border-bottom-color: var(--line); }
+.messages { padding-top: 25px; padding-bottom: 25px; }
+.bubble { border: 1px solid #eeeaf2; box-shadow: none; }
+.bubble.mine { border-color: #e6ddef; background: #eae2f3; }
+.meta, .message-time, .read { color: #817b8b; }
+.sendbar { border-top-color: var(--line); }
+.sendbar input, .modal input, .profile-status input { border-color: #e5dfea; background: #fbfafc; }
+.sendbar input:focus, .modal input:focus, .profile-status input:focus { border-color: #aa96c2; }
+.sendbar button, .modal section > button, .modal-actions button, .auth-submit, .profile-status button { background: #786399; color: #fff; }
+.modal { background: #241b31a3; }
+.modal section { border: 1px solid var(--line); border-radius: 18px; box-shadow: 0 20px 55px #2e203626; }
+.modal section, .auth-card { animation: none; }
+.modal p, .ai-check p { color: #696274; }
+.modal-actions .quiet { background: #f0ecf5; color: #5c4b73; }
+.focus.schedule { border-color: #e8e1ef; background: #f8f5fb; color: #5e4e75; }
+.focus.schedule span { color: #7b708d; }
+.focus.schedule button, .all-schedules-button { background: #ebe4f2 !important; color: #64507e !important; }
+.room-notice-host { border-bottom-color: var(--line); box-shadow: none; }
+.room-notice { background: #f5f1f8; }
+.notice-view { background: #e9e1f1; color: #634e80; }
+.auth { background: #faf9fc; }
+.auth-card { border: 1px solid var(--line); border-radius: 20px; box-shadow: 0 16px 42px #4332530c; }
+.auth-brand { margin-bottom: 24px; }
+.auth-tabs { background: #f2eef6; }
+.auth-tabs button.selected { color: #675181; box-shadow: 0 1px 4px #43325312; }
+.auth input, .auth select { border-color: #e5dfea; }
+.auth-hint { color: #817b8b; }
+.ai-policy-link { background: #f1edf6; color: #675181; }
+.ai-level.selected { border-color: #9e89b9; background: #f7f2fb; box-shadow: 0 0 0 2px #ebe2f4; }
+button:focus-visible, input:focus-visible, select:focus-visible { outline-color: #bda9d2; }
+
+@media (max-width: 700px) {
+  body { background: #fff; }
+  .layout { display: block; }
+  .head, .android-layout .head { height: 62px; padding: 0 18px; }
+  .android-layout .content { padding: 4px 18px 96px; }
+  .android-nav { border-top-color: var(--line); box-shadow: none; }
+  .android-nav button.active { background: transparent; color: #6f558f; }
+  .android-nav button { color: #8a8392; }
+  .avatar { width: 46px; height: 46px; }
+  .room { padding: 14px 2px; }
+  .chat { grid-template-rows: 62px auto minmax(0, 1fr) auto; }
+  .messages { padding: 18px 13px; }
+  .sendbar { padding: 9px 12px calc(9px + env(safe-area-inset-bottom)); }
+  .sendbar input { border-radius: 22px; }
+  .sendbar button { border-radius: 16px; }
+  .modal section { border-radius: 20px 20px 0 0; }
+}

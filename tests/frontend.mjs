@@ -25,4 +25,14 @@ assert.equal(vm.runInContext("savedAiResult('bad-json')",context),null);
 vm.runInContext(`rememberAiResult('hello',{verdict:'PASS',source:'ai'});`,context);
 assert.equal(vm.runInContext("savedAiResult('hello').verdict",context),'PASS');
 assert.match(vm.runInContext("aiResultKeyV4('hello')",context),/^v5\|/);
-console.log('Frontend: escaped warning, unavailable choice, failed-cache exclusion, versioned cache passed');
+vm.runInContext(`
+  roomMessages=[{sender:'친구',body:'어제 많이 기다렸어.'},{sender:'나',body:'미안해.'}];
+  signedIn='나'; aiIntervention='careful';
+  rememberAiResult('오늘은 5시에 볼까?',{verdict:'WARN',source:'ai'});
+  api=async (_url,options)=>{globalThis.sentCheck=JSON.parse(options.body);return {verdict:'PASS',info:{level:'none'}}};
+`,context);
+assert.equal((await vm.runInContext("checkForSend('오늘은 5시에 볼까?')",context)).verdict,'PASS');
+assert.equal(vm.runInContext('sentCheck.sender',context),'나');
+assert.equal(vm.runInContext('sentCheck.context.length',context),2);
+assert.equal(vm.runInContext('sentCheck.context[0]',context),'친구: 어제 많이 기다렸어.');
+console.log('Frontend: escaped warning, unavailable choice, failed-cache exclusion, versioned cache, contextual send passed');
