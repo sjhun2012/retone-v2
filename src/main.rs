@@ -624,7 +624,7 @@ async fn ai_rewrite(Json(input): Json<RewriteRequest>) -> Json<serde_json::Value
 
 async fn ai_schedule(Json(input): Json<ScheduleCheck>) -> Json<serde_json::Value> {
     let text = input.text.trim();
-    if ai_rules::schedule_negative(text) {
+    if !ai_rules::schedule_candidate(text) {
         return Json(serde_json::json!({"is_schedule":false,"source":"rules"}));
     }
     if let Some(plan) = ai_rules::local_plan(text, input.context.as_deref().unwrap_or(&[])) {
