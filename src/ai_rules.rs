@@ -85,10 +85,21 @@ pub fn is_task(text: &str) -> bool {
 }
 pub fn schedule_negative(text: &str) -> bool {
     let t = compact(text);
-    if ["응", "응좋아", "좋아", "그래", "알겠어", "넵", "네", "ㅇㅋ", "ㅇㅇ", "ok", "오케이", "응좋아내일보자"].contains(&t.as_str()) { return true; }
+    if [
+        "응", "응좋아", "그래좋아", "좋아", "좋아요", "그래", "알겠어", "넵", "네",
+        "ㅇㅋ", "ㅇㅇ", "ok", "okay", "오케이", "콜", "좋지", "가능해", "맞아",
+        "응좋아내일보자", "좋아내일보자", "그래내일보자", "응내일보자", "그럼좋아",
+        "그럼내일보자",
+    ].contains(&t.as_str()) { return true; }
     if ["어제", "지난주", "했어", "했어요", "끝났어", "가정하면", "수도있", "취소", "안만나", "가지말자"].iter().any(|s| t.contains(s)) && !is_task(text) { return true; }
     if ["왜안와", "빨리와", "언제와", "지금와"].iter().any(|s| t.contains(s)) && !is_task(text) { return true; }
     false
+}
+
+pub fn schedule_candidate(text: &str) -> bool {
+    if schedule_negative(text) { return false; }
+    let t = compact(text);
+    is_task(text) || ["갈래", "보자", "약속", "일정", "모임", "회식", "놀러"].iter().any(|word| t.contains(word))
 }
 
 #[derive(Debug, PartialEq)]
@@ -105,7 +116,7 @@ fn place(text: &str) -> String {
     text.split_whitespace().find_map(|w| w.strip_suffix("에서").filter(|s| !s.is_empty())).unwrap_or("").to_string()
 }
 pub fn local_plan(text: &str, context: &[String]) -> Option<Plan> {
-    if schedule_negative(text) || !is_task(text) { return None; }
+    if !schedule_candidate(text) || !is_task(text) { return None; }
     let t = compact(text);
     let mut date = when(text);
     let mut location = place(text);
@@ -139,13 +150,21 @@ mod tests {
     }
     #[test] fn requests_and_non_plans() {
         for text in ["피피티 만들어줘", "민수야 금요일 오후 5시까지 보고서 작성해줘", "회의 자료 정리해서 보내주세요", "혹시 발표 자료 좀 도와줄 수 있어?", "우리 주말에 영화 보러 가자", "내일까지 광합성 발표 자료를 만들어줘", "내일 오후 3시에 회의실에서 발표 준비하자", "다음 주 월요일 오전 10시에 회의합시다", "내일 이야기해도 될까?"] { assert!(local_plan(text, &[]).is_some(), "{text}"); }
-        for text in ["안녕", "과학 발표 주제로 벤포드 법칙은 어때?", "물은 수소와 산소로 이루어져 있어", "왜 안 와? 지금 8시 30분이잖아", "어제 오후 3시에 회의했어", "응 좋아 내일 보자", "내일 비가 오면 회의를 취소할 수도 있어"] { assert!(local_plan(text, &[]).is_none(), "{text}"); }
+        for text in ["안녕", "과학 발표 주제로 벤포드 법칙은 어때?", "물은 수소와 산소로 이루어져 있어", "왜 안 와? 지금 8시 30분이잖아", "어제 오후 3시에 회의했어", "응 좋아 내일 보자", "그래, 좋아!", "그래 좋아", "좋아. 내일 보자!", "내일 비가 오면 회의를 취소할 수도 있어"] { assert!(local_plan(text, &[]).is_none(), "{text}"); }
     }
     #[test] fn context_fields_and_no_invention() {
         let plan = local_plan("그럼 3시에 거기서 만나자", &["민수: 내일 도서관에서 발표 준비할래?".into()]).unwrap();
         assert_eq!(plan.when, "내일 3시에"); assert_eq!(plan.place, "도서관");
         let plan = local_plan("피피티 만들어줘", &[]).unwrap();
         assert_eq!((plan.who, plan.when, plan.place), (String::new(), String::new(), String::new()));
+    }
+    #[test] fn schedule_candidates_skip_agreements() {
+        for text in ["그래, 좋아!", "그래 좋아", "좋아. 내일 보자!", "응 좋아 내일 보자"] {
+            assert!(!schedule_candidate(text), "{text}");
+        }
+        for text in ["내일 만날래?", "우리 주말에 영화 보러 가자", "금요일까지 보고서 작성해줘"] {
+            assert!(schedule_candidate(text), "{text}");
+        }
     }
     #[test] fn rewrites_preserve_request() {
         assert!(rewrite_fallback("너 진짜 병신이냐?", "").is_some());
