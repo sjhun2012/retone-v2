@@ -83,14 +83,19 @@ pub fn is_task(text: &str) -> bool {
     let t = compact(text);
     ["만나자", "만날래", "만납시다", "만나요", "놀자", "가자", "갑시다", "이야기해도될까", "만들어줘", "만들어주세요", "작성해줘", "작성해주세요", "정리해줘", "정리해주세요", "보내줘", "보내주세요", "제출해", "준비하자", "준비합시다", "준비할래", "회의하자", "회의합시다", "도와줄수있", "도와줘", "예약해줘", "확인해줘", "발표하자", "내자"].iter().any(|s| t.contains(s))
 }
-pub fn schedule_negative(text: &str) -> bool {
+pub fn schedule_acknowledgement(text: &str) -> bool {
     let t = compact(text);
-    if [
+    [
         "응", "응좋아", "그래좋아", "좋아", "좋아요", "그래", "알겠어", "넵", "네",
         "ㅇㅋ", "ㅇㅇ", "ok", "okay", "오케이", "콜", "좋지", "가능해", "맞아",
         "응좋아내일보자", "좋아내일보자", "그래내일보자", "응내일보자", "그럼좋아",
         "그럼내일보자",
-    ].contains(&t.as_str()) { return true; }
+    ].contains(&t.as_str())
+}
+
+pub fn schedule_negative(text: &str) -> bool {
+    let t = compact(text);
+    if schedule_acknowledgement(text) { return true; }
     if ["어제", "지난주", "했어", "했어요", "끝났어", "가정하면", "수도있", "취소", "안만나", "가지말자"].iter().any(|s| t.contains(s)) && !is_task(text) { return true; }
     if ["왜안와", "빨리와", "언제와", "지금와"].iter().any(|s| t.contains(s)) && !is_task(text) { return true; }
     false
