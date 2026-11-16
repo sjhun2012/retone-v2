@@ -150,6 +150,7 @@ async function friends(){nav='friends';const users=await api('/api/users');userA
 let schedulePrefetch={text:'',result:null,promise:null,timer:null},pendingScheduleProposal=null;
 function scheduleReplyOnly(text){return ["응","응좋아","그래좋아","좋아","좋아요","그래","알겠어","넵","네","ㅇㅋ","ㅇㅇ","ok","okay","오케이","콜","좋지","가능해","맞아","응좋아내일보자","좋아내일보자","그래내일보자","응내일보자","그럼좋아","그럼내일보자"].includes(String(text||'').toLowerCase().replace(/[\s\p{P}\p{S}]/gu,''))}
 function scheduleCandidate(text){return !scheduleReplyOnly(text)&&/(일정|약속|회의|만나|놀자|가자|갈래|보자|까지|해\s*줘|만들어|준비|피피티|ppt|발표|과제|숙제|제출)/i.test(text)}
+function shouldAskScheduleAi(text){return Boolean(String(text||'').trim())&&!scheduleReplyOnly(text)}
 function handleChatInput(value){if(rewrittenApprovedText&&value.trim()!==rewrittenApprovedText)rewrittenApprovedText='';queueAiCheck(value);queueScheduleCheck(value)}
 function queueScheduleCheck(value){const text=value.trim();clearTimeout(schedulePrefetch.timer);if(!text||!scheduleCandidate(text)){schedulePrefetch={text:'',result:null,promise:null,timer:null};return}if(schedulePrefetch.text===text&&(schedulePrefetch.result||schedulePrefetch.promise))return;schedulePrefetch={text,result:null,promise:null,timer:setTimeout(()=>runSchedulePrefetch(text),450)}}
 async function runSchedulePrefetch(text){if(schedulePrefetch.text!==text)return null;const request=api('/api/ai/schedule',{method:'POST',body:JSON.stringify({text,sender:signedIn,context:messageContext()})});schedulePrefetch.promise=request;try{const result=await request;if(schedulePrefetch.text===text){schedulePrefetch.result=result;schedulePrefetch.promise=null}return result}catch{if(schedulePrefetch.text===text)schedulePrefetch.promise=null;return null}}
@@ -168,7 +169,7 @@ async function maybeScheduleFromMessage(message,context){
   try{
     // Do not turn an acknowledgement of an earlier invitation into another
     // schedule proposal. The server repeats this guard for API callers.
-    if(!scheduleCandidate(message.body))return;
+    if(!shouldAskScheduleAi(message.body))return;
     const prompted=schedulePromptedMessages();
     if(message.id&&prompted.has(message.id))return;
     if(message.id){prompted.add(message.id);saveSchedulePromptedMessages(prompted);}
@@ -183,7 +184,7 @@ async function maybeScheduleFromMessage(message,context){
 function schedulePromptedMessages(){try{return new Set(JSON.parse(sessionStorage.getItem(`retone-schedule-prompts-${signedInId}`)||'[]'))}catch{return new Set()}}
 function saveSchedulePromptedMessages(ids){try{sessionStorage.setItem(`retone-schedule-prompts-${signedInId}`,JSON.stringify([...ids].slice(-200)))}catch{}}
 async function maybeScheduleFromIncoming(){
-  const message=roomMessages.slice().reverse().find(item=>!isMyMessage(item)&&scheduleCandidate(item.body)&&!schedulePromptedMessages().has(item.id));
+  const message=roomMessages.slice().reverse().find(item=>!isMyMessage(item)&&shouldAskScheduleAi(item.body)&&!schedulePromptedMessages().has(item.id));
   if(!message)return;
   const index=roomMessages.findIndex(item=>item.id===message.id);
   await maybeScheduleFromMessage(message,roomMessages.slice(0,index+1).map(item=>`${item.sender}: ${item.body}`));
