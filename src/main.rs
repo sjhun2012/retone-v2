@@ -626,14 +626,8 @@ async fn ai_schedule(Json(input): Json<ScheduleCheck>) -> Json<serde_json::Value
     let text = input.text.trim();
     // Every non-acknowledgement reaches the AI schedule classifier. The
     // short acknowledgement guard remains to avoid repeating a prior proposal.
-    if ai_rules::schedule_negative(text) {
+    if ai_rules::schedule_acknowledgement(text) {
         return Json(serde_json::json!({"is_schedule":false,"source":"rules"}));
-    }
-    if let Some(plan) = ai_rules::local_plan(text, input.context.as_deref().unwrap_or(&[])) {
-        return Json(serde_json::json!({"is_schedule":true,"title":"일정","source":"rules","fields":[
-            {"label":"할일","value":plan.task},{"label":"누구","value":plan.who},
-            {"label":"언제","value":plan.when},{"label":"어디","value":plan.place}
-        ]}));
     }
     let context = input
         .context
@@ -645,7 +639,7 @@ async fn ai_schedule(Json(input): Json<ScheduleCheck>) -> Json<serde_json::Value
         .collect::<Vec<_>>()
         .join("\n");
     let prompt = format!(
-        "너는 채팅에서 새 일정·약속·할 일을 찾는 도우미다. 앞으로 할 일을 제안하거나 확정하는 문장만 true다. 함께 만나거나 놀거나 어디 가자는 새 제안, '피피티 만들어줘', '발표 준비하자', '금요일까지 보고서 내자' 같은 구체적인 할 일 요청은 true다. 이미 진행 중인 약속에서 하는 재촉·항의·상태 확인은 일정이 아니다. '왜 안 와?', '빨리 와', '언제 와?', '지금 8시 30분이잖아'는 절대 false다. 단순 인사·과거 회상·가정도 false다. true라면 JSON만 출력: {{\"is_schedule\":true,\"title\":\"일정\",\"fields\":[{{\"label\":\"할일\",\"value\":string}},{{\"label\":\"누구\",\"value\":string}},{{\"label\":\"언제\",\"value\":string}},{{\"label\":\"어디\",\"value\":string}},...]}}. fields에는 반드시 할일·누구·언제·어디를 이 순서로 포함한다. 알 수 없는 값은 반드시 빈 문자열로 두고 '미정'이나 추측을 쓰지 마라. 예를 들어 '피피티 만들어줘'는 할일='피피티 만들기', 나머지는 빈 문자열이다. '금요일까지 바나나가 피피티 만들어'는 할일='피피티 만들기', 누구='바나나', 언제='금요일', 어디=''다. 필요할 때만 세부사항을 추가한다. false라면 {{\"is_schedule\":false,\"title\":\"\",\"fields\":[]}}만 출력한다.\n보낸 사람: {}\n최근 대화:\n{}\n현재 메시지: {}",
+        "너는 채팅에서 새 일정·약속·할 일을 찾는 도우미다. 앞으로 할 일을 제안하거나 확정하는 문장만 true다. 함께 만나거나 놀거나 어디 가자는 새 제안, '내일 도서관에서 같이 공부할래?', '금요일 저녁에 밥 먹자.', '점심에 만나서 식사하자.' 같은 약속 제안, '피피티 만들어줘', '발표 준비하자', '금요일까지 보고서 내자' 같은 구체적인 할 일 요청은 true다. 이미 진행 중인 약속에서 하는 재촉·항의·상태 확인은 일정이 아니다. '왜 안 와?', '빨리 와', '언제 와?', '지금 8시 30분이잖아'는 절대 false다. 단순 인사·과거 회상·가정도 false다. true라면 JSON만 출력: {{\"is_schedule\":true,\"title\":\"일정\",\"fields\":[{{\"label\":\"할일\",\"value\":string}},{{\"label\":\"누구\",\"value\":string}},{{\"label\":\"언제\",\"value\":string}},{{\"label\":\"어디\",\"value\":string}},...]}}. fields에는 반드시 할일·누구·언제·어디를 이 순서로 포함한다. 알 수 없는 값은 반드시 빈 문자열로 두고 '미정'이나 추측을 쓰지 마라. 예를 들어 '피피티 만들어줘'는 할일='피피티 만들기', 나머지는 빈 문자열이다. '금요일까지 바나나가 피피티 만들어'는 할일='피피티 만들기', 누구='바나나', 언제='금요일', 어디=''다. 필요할 때만 세부사항을 추가한다. false라면 {{\"is_schedule\":false,\"title\":\"\",\"fields\":[]}}만 출력한다.\n보낸 사람: {}\n최근 대화:\n{}\n현재 메시지: {}",
         input.sender.trim(), context, text
     );
     let parsed = match ai_transport::json_response(&prompt, ai_transport::schedule_schema(), 700).await {
