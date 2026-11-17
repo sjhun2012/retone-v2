@@ -67,6 +67,19 @@ async function sendApproved(){if(!pendingSend)return;const next=pendingSend;pend
 async function send(event){event.preventDefault();if(pendingSend)return;const input=document.querySelector('#text'),body=input?.value.trim();if(!body)return;if(skipRewrittenAiCheck){skipRewrittenAiCheck=false;input.value='';input.disabled=true;await api(`/api/rooms/${roomId}/messages`,{method:'POST',body:JSON.stringify({sender:signedIn,body})});await openRoom(roomId);return}pendingSend={body,room:roomId};input.value='';input.disabled=true;const saved=aiIntervention!=='off'&&savedAiResult(body);input.placeholder=aiIntervention==='off'?'메시지를 보내고 있어요…':saved?'이전 확인 결과를 사용해요…':'AI가 확인 중이에요…';addPendingBubble(body);try{showCheckResult(await checkForSend(body))}catch{await sendApproved()}}
 function clearStoredSession(){['retone-v2-name','retone-v2-user-id','retone-v2-ai-level','retone-v2-ai-consent'].forEach(key=>sessionStorage.removeItem(key));signedIn='';signedInId='';data=null;roomId=null}
 function logout(){stopInboxPolling();clearStoredSession();start()}
+// Temporary test shortcuts requested for the two seeded accounts.
+function quickTestLogin(name,phone){
+  const nameInput=document.querySelector('#auth-name'),phoneInput=document.querySelector('#auth-phone'),passwordInput=document.querySelector('#auth-password');
+  if(!nameInput||!phoneInput||!passwordInput)return;
+  nameInput.value=name;phoneInput.value=phone;passwordInput.value='111111';
+  finishAuth('login');
+}
+function authForm(mode){
+  const join=mode==='signup';
+  document.querySelectorAll('.auth-tabs button').forEach((button,index)=>button.classList.toggle('selected',(index===1)===join));
+  const shortcuts=join?'':`<div class="test-login-shortcuts"><small>테스트 로그인</small><button type="button" onclick="quickTestLogin('신지훈','01000000000')">신지훈으로 로그인</button><button type="button" onclick="quickTestLogin('바나나','01011111111')">바나나로 로그인</button></div>`;
+  document.querySelector('#auth-form').innerHTML=`<label>이름<input id="auth-name" placeholder="이름을 입력하세요"></label><label>전화번호<input id="auth-phone" inputmode="numeric" placeholder="전화번호를 입력하세요"></label><label>비밀번호<input id="auth-password" type="password" placeholder="비밀번호를 입력하세요"></label>${shortcuts}${join?'<button type="button" class="ai-policy-link" onclick="showAiPolicy()">AI가 개입하는 이유와 사용 범위 보기</button><label class="consent"><input id="auth-ai-consent" type="checkbox"> AI 사용 안내를 읽었고, AI 대화 도움 사용에 동의해요.</label>':''}<button class="auth-submit" onclick="finishAuth('${mode}')">${join?'회원가입하고 시작하기':'로그인'}</button>${join?'<p class="auth-hint">같은 전화번호가 있으면 확인 절차가 안내돼요.</p>':''}`;
+}
 async function start(){aiIntervention='standard';sessionStorage.setItem('retone-v2-ai-level','standard');if(signedIn&&signedInId){try{const users=await api('/api/users');if(users.some(user=>user.id===signedInId))return home();clearStoredSession()}catch{return home()}}else if(signedIn||signedInId){clearStoredSession()}app.innerHTML=`<main class="auth"><section class="auth-card"><div class="auth-brand">Re:<i>Tone</i></div><div class="auth-tabs"><button class="selected" onclick="authForm('login')">로그인</button><button onclick="authForm('signup')">회원가입</button></div><div id="auth-form"></div></section></main>`;authForm('login')}
 const hiddenFriendsKey=()=>`retone-v2-hidden-friends-v1-${signedInId||'guest'}`;
 function hiddenFriendIds(){try{return new Set(JSON.parse(localStorage.getItem(hiddenFriendsKey())||'[]'))}catch{return new Set()}}
