@@ -407,7 +407,7 @@ function roomScheduleNotice(room){
 }
 function showRoomSchedules(room){
   const appointments=roomAppointments(room);
-  popup(`<div class="group-modal schedule-list"><h2>이 채팅방 일정</h2><p>만든 사람은 일정을 눌러 수정할 수 있어요.</p>${appointments.length?appointments.map(item=>`<div class="schedule-list-row"><strong>${esc(item.title||'일정')}</strong><span>${scheduleNoticeFields(item)||'입력된 세부사항이 없어요.'}</span>${item.creator===signedIn?`<button onclick="closePopup();editAppointment('${item.id}')">수정</button>`:''}</div>`).join(''):'<p>표시할 일정이 없어요.</p>'}<button class="quiet schedule-list-close" onclick="closePopup()">닫기</button></div>`);
+  popup(`<div class="group-modal schedule-list"><h2>이 채팅방 일정</h2><p>만든 사람은 일정을 눌러 수정할 수 있어요.</p>${appointments.length?appointments.map(item=>`<div class="schedule-list-row"><strong>${esc(item.title||'일정')}</strong><div class="schedule-detail-fields">${scheduleFieldsMarkup(item)||'<span>입력된 세부사항이 없어요.</span>'}</div>${item.creator===signedIn?`<button onclick="closePopup();editAppointment('${item.id}')">수정</button>`:''}</div>`).join(''):'<p>표시할 일정이 없어요.</p>'}<button class="quiet schedule-list-close" onclick="closePopup()">닫기</button></div>`);
 }
 async function openRoom(id){
   roomId=id;if(!data)data=await api('/api/bootstrap');const room=data.rooms.find(item=>item.id===id);if(!room)return home();
