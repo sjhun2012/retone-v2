@@ -11,11 +11,15 @@ pub fn output_text(value: &Value) -> Option<String> {
         .filter_map(|part| part["text"].as_str()).collect::<Vec<_>>().join("");
     if text.trim().is_empty() { None } else { Some(text.trim().to_string()) }
 }
-async fn response(prompt: &str, format: Value, max_tokens: u32) -> Option<String> {
+async fn response(input: &str, instructions: Option<&str>, format: Value, max_tokens: u32) -> Option<String> {
     let key = env::var("OPENAI_API_KEY").ok().filter(|key| !key.trim().is_empty())?;
     let client = reqwest::Client::builder().timeout(Duration::from_secs(15)).build().ok()?;
+    let mut payload = json!({"model":"gpt-4o-mini","input":input,"max_output_tokens":max_tokens,"store":false,"text":{"format":format}});
+    if let Some(instructions) = instructions {
+        payload["instructions"] = json!(instructions);
+    }
     let response = match client.post("https://api.openai.com/v1/responses").bearer_auth(key)
-        .json(&json!({"model":"gpt-4o-mini","input":prompt,"max_output_tokens":max_tokens,"store":false,"text":{"format":format}}))
+        .json(&payload)
         .send().await {
         Ok(response) => response,
         Err(_) => { eprintln!("AI request failed or timed out"); return None; }
@@ -29,11 +33,11 @@ async fn response(prompt: &str, format: Value, max_tokens: u32) -> Option<String
     if result.is_none() { eprintln!("AI output missing, refused or incomplete"); }
     result
 }
-pub async fn text_response(prompt: &str, max_tokens: u32) -> Option<String> {
-    response(prompt, json!({"type":"text"}), max_tokens).await
-}
 pub async fn json_response(prompt: &str, schema: Value, max_tokens: u32) -> Option<Value> {
-    let text = response(prompt, json!({"type":"json_schema","name":"retone_result","strict":true,"schema":schema}), max_tokens).await?;
+    structured_response(prompt, None, schema, max_tokens).await
+}
+pub async fn structured_response(input: &str, instructions: Option<&str>, schema: Value, max_tokens: u32) -> Option<Value> {
+    let text = response(input, instructions, json!({"type":"json_schema","name":"retone_result","strict":true,"schema":schema}), max_tokens).await?;
     serde_json::from_str(&text).ok()
 }
 pub fn check_schema() -> Value {

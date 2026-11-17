@@ -1,5 +1,6 @@
 mod ai_rules;
 mod ai_transport;
+mod rewrite;
 use argon2::{Argon2, PasswordHash, PasswordHasher, PasswordVerifier};
 use axum::{
     Json, Router,
@@ -39,6 +40,8 @@ struct Message {
     id: String,
     room_id: String,
     sender: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    sender_id: Option<Uuid>,
     mine: bool,
     body: String,
     created: i64,
@@ -111,6 +114,7 @@ struct App {
 #[derive(Deserialize)]
 struct Send {
     sender: String,
+    sender_id: Option<Uuid>,
     body: String,
 }
 #[derive(Deserialize)]
@@ -562,73 +566,6 @@ async fn ai_check(State(app): State<App>, Json(input): Json<AiCheck>) -> Json<se
         serde_json::json!({"verdict":verdict,"suggestion":suggestion,"info":{"level":info_level,"note":info_note,"queries":info_queries},"source":"ai"}),
     )
 }
-async fn ai_rewrite(Json(input): Json<RewriteRequest>) -> Json<serde_json::Value> {
-    let text = input.text.trim();
-    if text.is_empty() {
-        return Json(serde_json::json!({"suggestion":""}));
-    }
-    let context = input
-        .context
-        .as_deref()
-        .unwrap_or(&[])
-        .iter()
-        .take(6)
-        .cloned()
-        .collect::<Vec<_>>()
-        .join("\n");
-    let sender = input.sender.as_deref().unwrap_or("현재 사용자").trim();
-    // Common short insults should feel immediate and natural. They do not need
-    // an external model call, which also avoids rewriting them word-by-word.
-    let compact = text
-        .chars()
-        .filter(|c| !c.is_whitespace() && !c.is_ascii_punctuation())
-        .collect::<String>();
-    let context_compact = context
-        .chars()
-        .filter(|c| !c.is_whitespace() && !c.is_ascii_punctuation())
-        .collect::<String>();
-    let dismissive_reply = ["알빠야", "내알바야", "니상관아니야", "네상관아니야"]
-        .iter()
-        .any(|phrase| compact.contains(phrase));
-    let lateness_complaint = context.contains("[상대]")
-        && ["왜안와", "왜안왔", "늦었", "늦어", "기다렸", "약속시간"]
-            .iter()
-            .any(|phrase| context_compact.contains(phrase));
-    if dismissive_reply && lateness_complaint {
-        return Json(serde_json::json!({"suggestion":"늦어서 미안해. 다음에는 미리 연락할게.","error":""}));
-    }
-    // For direct insults, a local rewrite keeps the speaker's intent anchored
-    // when the surrounding conversation is unrelated to the insulting text.
-    if ai_rules::hostility(text) == Some("멍청") {
-        if let Some(suggestion) = ai_rules::rewrite_fallback(text, &context) {
-            return Json(serde_json::json!({"suggestion":suggestion,"error":"","source":"rules"}));
-        }
-    }
-    let quick = if compact == "야이나쁜놈아" {
-        Some("지금 정말 화가 났어. 그렇게 하지 말아줘.")
-    } else if compact == "야이씨발놈아" {
-        Some("지금 정말 화가 났어. 그렇게 말하지 말아줘.")
-    } else if compact == "풉바보" {
-        Some("그 말은 듣기 싫어. 서로 존중해서 이야기하자.")
-    } else {
-        None
-    };
-    if context.is_empty() {
-        if let Some(suggestion) = quick {
-            return Json(serde_json::json!({"suggestion":suggestion,"error":""}));
-        }
-    }
-    let prompt = format!(
-        "다음 채팅을 뜻은 최대한 유지하면서 상대가 덜 공격적으로 들릴 자연스러운 한국어로 바꿔줘. 판정·설명·따옴표 없이 바꾼 문장만 출력.\n중요: 원문은 반드시 '{sender}'가 작성했다. 최근 대화에는 [현재 사용자]와 [상대] 역할표가 있다. 상대의 감정·불만을 현재 사용자의 감정으로 복사하지 마라. 예를 들어 [상대]가 '너 왜 안 와?'라고 했다고 해서 '{sender}'에게 '내가 기대했는데 네가 늦어서 속상해'라고 쓰게 하면 안 된다. 단, 상대가 현재 사용자의 늦음·실수·약속 변경을 구체적으로 지적했고 현재 사용자가 '알빠야?', '니 상관 아니야'처럼 방어적으로 답하려 한다면, 상대의 대사를 흉내 내지 말고 현재 사용자가 책임지는 사과로 바꿔라. 예: '늦어서 미안해. 다음에는 미리 연락할게.' 원문에 있는 욕설도 '{sender}'가 한 말이므로, 그것만 근거로 상대가 욕하거나 잘못했다고 쓰지 마라.\n욕설·인신공격은 완곡한 욕설로 바꾸지 말고, 문장 전체의 요청·질문·상황은 살린 채 화난 감정과 상대에게 바라는 행동을 분명히 말해라. 사실이 부족하면 상대 행동을 지어내지 말고 중립적인 감정과 대화 방식을 말해라. 단어 하나만 바꾸지 마라.\n최근 대화(없으면 무시):\n{context}\n원문({sender} 작성): {text}"
-    );
-    if let Some(suggestion) = ai_transport::text_response(&prompt, 350).await {
-        return Json(serde_json::json!({"suggestion":suggestion,"error":"","source":"ai"}));
-    }
-    if let Some(suggestion) = ai_rules::rewrite_fallback(text, &context) {
-        return Json(serde_json::json!({"suggestion":suggestion,"error":"","source":"rules"}));
-    }
-    Json(serde_json::json!({"suggestion":"","error":"REWRITE_UNAVAILABLE"}))
-}
 
 async fn ai_schedule(Json(input): Json<ScheduleCheck>) -> Json<serde_json::Value> {
     let text = input.text.trim();
@@ -897,11 +834,17 @@ async fn send(
     Path(id): Path<String>,
     Json(input): Json<Send>,
 ) -> Result<Json<Message>, StatusCode> {
-    let sender = input.sender.trim().chars().take(24).collect::<String>();
+    let sender = match input.sender_id {
+        Some(id) => rewrite::account_name(&app, id).await?,
+        None => input.sender.trim().chars().take(24).collect::<String>(),
+    };
     if sender.is_empty() || input.body.trim().is_empty() {
         return Err(StatusCode::BAD_REQUEST);
     }
     let mut d = app.data.write().await;
+    if let Some(id_of_sender) = input.sender_id {
+        rewrite::require_member(&d, &id, id_of_sender)?;
+    }
     let unread = d
         .rooms
         .iter()
@@ -912,6 +855,7 @@ async fn send(
         id: Uuid::new_v4().to_string(),
         room_id: id.clone(),
         sender: sender.clone(),
+        sender_id: input.sender_id,
         // A message is not intrinsically "mine": that depends on the person
         // currently looking at it. The browser compares the sender to its
         // signed-in user, so A's message is shown as incoming for B.
@@ -1265,7 +1209,7 @@ async fn main() {
         .route("/api/friend-requests/{request_id}/decline/{receiver_id}", delete(decline_friend_request))
         .route("/api/friends/{user_id}/remove/{friend_id}", delete(remove_friend))
         .route("/api/ai/check", post(ai_check))
-        .route("/api/ai/rewrite", post(ai_rewrite))
+        .route("/api/ai/rewrite", post(rewrite::legacy))
         .route("/api/ai/schedule", post(ai_schedule))
         .route("/api/ai/support", post(ai_support))
         .route("/api/ai/reports", post(report_ai))
@@ -1280,6 +1224,7 @@ async fn main() {
         .route("/api/appointments/{id}", patch(update_appointment).delete(delete_appointment))
         .route("/api/appointments/{id}/creator/{creator}", patch(update_own_appointment).delete(delete_own_appointment))
         .route("/api/rooms/{id}/messages", get(messages).post(send))
+        .route("/api/rooms/{id}/rewrite", post(rewrite::in_room))
         .route("/api/rooms/{id}/message-events", get(room_message_events))
         .route("/api/rooms/{id}/read", post(mark_messages_read))
         .route(

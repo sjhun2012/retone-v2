@@ -53,7 +53,7 @@ async function send(page, room, text) {
   });
   const [response] = await Promise.all([sent, (async () => {
     await page.locator('#text').fill(text);
-    await page.locator('.sendbar button').click();
+    await page.getByRole('button', {name: '보내기', exact: true}).click();
     const approval = page.locator('.ai-check').getByRole('button', {name: '이대로 보내기'});
     const bubble = page.locator('.bubble.mine[data-message-id]').filter({hasText: text});
     await approval.or(bubble).first().waitFor();
@@ -159,6 +159,8 @@ async function verify() {
     const {verifyScheduleApi} = await import('./schedule-api.mjs');
     const secondInvite = await post(`/api/rooms/${room.id}/messages`, {sender: writer.name, body: '금요일 영화 보자.'});
     await verifyScheduleApi(base, secondInvite);
+    await require('./rewrite-flow.cjs')({sender, writer, reader, room, base, post, send});
+    assert.deepEqual(errors, []);
     console.log('Two real browser sessions passed: sender-only offer, both replies, edited details in peer view, and push deletion with polling blocked.');
   } finally { await browser.close(); }
 }
