@@ -2,6 +2,7 @@ use super::{App, Data, Message, RewriteRequest, ai_transport};
 use axum::{Json, extract::{Path, State}, http::StatusCode};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
+use std::future::Future;
 use uuid::Uuid;
 
 // The AI consent screen covers the unsent message and the six latest turns in this room.
@@ -64,7 +65,7 @@ async fn history(app: &App, room: &str, user_id: Uuid, writer: &str) -> Result<V
     Ok(recent_turns(&data.messages, room, user_id, writer))
 }
 
-async fn suggest(writer: &str, draft: &str, turns: &[Turn]) -> Option<String> {
+async fn suggest(writer: &str, draft: &str, turns: Vec<Turn>) -> Option<String> {
     let input = json!({"writer": writer, "recent_messages": turns, "draft": draft});
     let schema = json!({"type":"object", "additionalProperties":false,
         "required":["suggestion"], "properties":{"suggestion":{"type":"string"}}});
@@ -85,23 +86,28 @@ pub(super) async fn in_room(
     let draft = request.text.trim();
     if draft.is_empty() { return Err(StatusCode::BAD_REQUEST); }
     let writer = account_name(&app, request.user_id).await?;
-    rewrite_latest(&writer, draft, async || history(&app, &room, request.user_id, &writer).await, suggest).await
+    rewrite_latest(
+        || history(&app, &room, request.user_id, &writer),
+        |turns| suggest(&writer, draft, turns),
+    ).await
 }
 
-async fn rewrite_latest(
-    writer: &str,
-    draft: &str,
-    snapshot: impl AsyncFn() -> Result<Vec<Turn>, StatusCode>,
-    generate: impl AsyncFn(&str, &str, &[Turn]) -> Option<String>,
-) -> Result<Json<Value>, StatusCode> {
+async fn rewrite_latest<Read, Generate>(
+    snapshot: impl Fn() -> Read,
+    generate: impl Fn(Vec<Turn>) -> Generate,
+) -> Result<Json<Value>, StatusCode>
+where
+    Read: Future<Output = Result<Vec<Turn>, StatusCode>>,
+    Generate: Future<Output = Option<String>>,
+{
     let mut turns = snapshot().await?;
     // A reply or deletion can arrive while the model is working. Retry once on
     // the new transcript. No room lock is held during either network request.
     for _ in 0..2 {
-        let Some(suggestion) = generate(writer, draft, &turns).await else { return Ok(unavailable()); };
+        let ids: Vec<_> = turns.iter().map(|t| t.id.clone()).collect();
+        let Some(suggestion) = generate(turns).await else { return Ok(unavailable()); };
         let current = snapshot().await?;
-        if current.iter().map(|t| &t.id).eq(turns.iter().map(|t| &t.id)) {
-            let ids: Vec<_> = turns.iter().map(|t| &t.id).collect();
+        if current.iter().map(|t| &t.id).eq(&ids) {
             return Ok(Json(json!({"suggestion":suggestion, "source":"ai", "error":"", "context_ids":ids})));
         }
         turns = current;
@@ -112,7 +118,7 @@ async fn rewrite_latest(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::cell::Cell;
+    use std::{cell::Cell, future::ready};
 
     fn message(n: usize, room: &str, sender_id: Option<Uuid>, speaker: &str) -> Message {
         Message { id: n.to_string(), room_id: room.into(), sender: speaker.into(), sender_id,
@@ -139,14 +145,12 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn reply_or_deletion_during_generation_uses_new_snapshot_and_the_original_draft() {
+    async fn reply_or_deletion_during_generation_uses_new_snapshot() {
         let version = Cell::new(1);
-        let Json(answer) = rewrite_latest("지수", "두 번째가 좋아", async || Ok(transcript(version.get())),
-            async |writer, draft, history: &[Turn]| {
-                assert_eq!(writer, "지수");
-                assert_eq!(draft, "두 번째가 좋아");
+        let Json(answer) = rewrite_latest(|| ready(Ok(transcript(version.get()))),
+            |history| {
                 version.set(2);
-                Some(history[0].text.clone())
+                ready(Some(history[0].text.clone()))
             }).await.unwrap();
         assert_eq!(answer["suggestion"], "선택지 2");
         assert_eq!(answer["context_ids"], json!(["2"]));
@@ -155,15 +159,15 @@ mod tests {
     #[tokio::test]
     async fn fast_chat_and_model_failure_never_return_a_stale_or_canned_suggestion() {
         let version = Cell::new(0);
-        let Json(answer) = rewrite_latest("지수", "그래", async || Ok(transcript(version.get())),
-            async |_, _, _: &[Turn]| {
+        let Json(answer) = rewrite_latest(|| ready(Ok(transcript(version.get()))),
+            |_| {
                 version.set(version.get() + 1);
-                Some("오래된 결과".into())
+                ready(Some("오래된 결과".into()))
             }).await.unwrap();
         assert_eq!(version.get(), 2);
         assert_eq!(answer["error"], "CONVERSATION_CHANGED");
         assert_eq!(answer["suggestion"], "");
-        let Json(failed) = rewrite_latest("지수", "그래", async || Ok(vec![]), async |_, _, _| None).await.unwrap();
+        let Json(failed) = rewrite_latest(|| ready(Ok(vec![])), |_| ready(None)).await.unwrap();
         assert_eq!(failed["error"], "REWRITE_UNAVAILABLE");
         assert_eq!(failed["suggestion"], "");
     }
@@ -185,7 +189,7 @@ pub(super) async fn legacy(Json(request): Json<RewriteRequest>) -> Json<Value> {
         let (speaker, body) = content.split_once(": ").unwrap_or(("", content));
         Turn { id: String::new(), speaker: speaker.into(), from_writer: role.unwrap_or(speaker == writer), text: body.into() }
     }).collect();
-    match suggest(writer, draft, &turns).await {
+    match suggest(writer, draft, turns).await {
         Some(suggestion) => Json(json!({"suggestion":suggestion,"source":"ai","error":""})),
         None => unavailable(),
     }

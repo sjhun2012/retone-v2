@@ -42,7 +42,8 @@ function rewriteDraft() {
   modal.onkeydown = event => { if (event.key === 'Escape') closeRewriteEditor(); };
   editor.retry.onclick = () => loadRewrite(editor);
   editor.apply.onclick = () => {
-    if (editor !== activeRewrite || !isCurrentSendView(editor) || input.value !== editor.original) {
+    if (editor !== activeRewrite) return;
+    if (!isCurrentSendView(editor) || input.value !== editor.original) {
       closeRewriteEditor(false);
       return;
     }
@@ -81,7 +82,7 @@ async function loadRewrite(editor, changed = false) {
       : '말을 고치지 못했어요. 잠시 후 다시 시도해 주세요.';
     return;
   }
-  editor.suggestion = response.suggestion.trim();
+  editor.suggestion = response.suggestion.trim().replace(/\s*[\r\n]+\s*/g, ' ');
   editor.result.textContent = editor.suggestion;
   editor.contextIds = response.context_ids;
   // An older in-flight poll may still return the transcript from before this answer.
