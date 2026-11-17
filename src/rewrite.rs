@@ -16,7 +16,8 @@ const INSTRUCTIONS: &str = r#"너는 한국어 메신저의 문장 편집자다.
 
 '그거', '그때', '두 번째로'처럼 대상을 가리키는 초안에서는 최신 발언을 기준으로 대상을 확인한다. 앞에서 선택지를 명시했고 가리키는 대상이 하나라면 반드시 그 구체적인 값을 넣는다. 회의 시간을 골랐다면 해당 요일과 시각을, 색을 골랐다면 색 이름을 적는다. 정정 전 값은 쓰지 않는다. 불분명한 대상은 지어내지 않고, 상대의 제안을 작성자의 수락이나 약속으로 바꾸지 않는다.
 
-JSON의 question_focus에는 작성자가 실제로 답을 원하는 질문이면 그 정보를 묻는 짧은 어구를 적는다(예: '언제쯤'). 질문이 아니거나 욕설뿐인 수사적 질문이면 null이다. resolved_references에는 초안의 지시어·선택에 대응하는 구체값을 대화에서 그대로 발췌한다(예: ['금요일 오전 10시']). 해당하지 않으면 빈 배열이다. suggestion에 이 어구와 실제 선택값을 자연스럽게 반영한다.
+question_kind는 시점·날짜·소요 시간을 묻는 질문이면 time, 그 밖의 실제 질문이면 other, 질문이 아니거나 욕설뿐인 수사적 질문이면 none이다. 같은 정보를 자연스럽게 한 번만 묻고, '대체' 같은 날 선 재촉은 덜어낸다. 말한 내용을 되풀이한 뒤 다시 질문하지 않는다.
+resolved_references에는 '두 번째', '그때', '그 색' 등 초안의 지시어를 명시적인 값으로 풀어 쓸 때만, 그 구체값을 최신 대화에서 짧게 발췌한다(예: ['금요일 오전 10시']). 단순한 질문이나 감정 표현에는 빈 배열을 쓴다. suggestion에는 실제 선택값을 자연스럽게 반영한다.
 
 공격적인 표현은 같은 맥락에서 불만이나 바라는 행동을 말하는 표현으로 바꾸고, 대화에 없는 잘못·감정·사과·해명·약속은 덧붙이지 않는다. 이미 예의 있는 문장은 필요한 만큼만 다듬는다. 원문의 존댓말·반말, 쓰는 언어와 간결한 채팅체를 살린다. suggestion에는 작성자가 보낼 말만 쓰고 설명, 화자 표시, 인용 부호, 여러 선택지는 쓰지 않는다."#;
 
@@ -70,8 +71,12 @@ async fn history(app: &App, room: &str, user_id: Uuid, writer: &str) -> Result<V
 }
 
 #[derive(Deserialize)]
+#[serde(rename_all = "lowercase")]
+enum Question { Time, Other, None }
+
+#[derive(Deserialize)]
 struct Proposal {
-    question_focus: Option<String>,
+    question_kind: Question,
     resolved_references: Vec<String>,
     suggestion: String,
 }
@@ -80,18 +85,30 @@ fn compact_phrase(text: &str) -> String {
     text.chars().filter(|c| !c.is_whitespace()).collect::<String>().to_lowercase()
 }
 
-fn revision_needed(proposal: &Proposal, turns: &[Turn]) -> Option<&'static str> {
+fn asks_about_time(message: &str) -> bool {
+    message.split_inclusive(['.', '!', '?', '。', '！', '？', '\n']).any(|clause| {
+        let words = compact_phrase(clause);
+        if ["언제", "몇시", "몇분", "며칠", "몇월", "얼마나", "어느날", "어느때", "어떤날", "걸릴지"]
+            .iter().any(|word| words.contains(word)) { return true; }
+        let names_a_time = ["시간", "시각", "요일", "날짜", "쯤"].iter().any(|word| words.contains(word));
+        let seeks_an_answer = clause.ends_with(['?', '？']) || ["알려", "궁금", "말해", "말씀", "답해"]
+            .iter().any(|word| words.contains(word));
+        names_a_time && seeks_an_answer
+    })
+}
+
+fn revision_needed(proposal: &Proposal, draft: &str, turns: &[Turn]) -> Option<&'static str> {
     let message = compact_phrase(&proposal.suggestion);
     if message.is_empty() { return Some("작성자가 보낼 문장을 작성한다."); }
-    if let Some(focus) = &proposal.question_focus {
-        let focus = compact_phrase(focus);
-        if !focus.is_empty() && !message.contains(&focus) {
-            return Some("원문에서 답을 구하는 정보가 빠졌다. 같은 정보를 묻는 자연스러운 질문을 남긴다.");
-        }
+    // A time enquiry can be direct ("몇 시쯤 와?") or indirect ("도착 시간을 알려줘").
+    // The model's internal description does not have to appear verbatim in a chat message.
+    if matches!(proposal.question_kind, Question::Time) && draft.chars().any(|c| ('가'..='힣').contains(&c)) &&
+        !asks_about_time(&proposal.suggestion) {
+        return Some("시점이나 소요 시간을 답할 수 있는 질문이 빠졌다. 재촉을 덜고 같은 질문을 한 번만 한다.");
     }
     for reference in &proposal.resolved_references {
         let reference = compact_phrase(reference);
-        if reference.is_empty() || !turns.iter().any(|t| compact_phrase(&t.text).contains(&reference)) {
+        if reference.is_empty() || !(compact_phrase(draft).contains(&reference) || turns.iter().any(|t| compact_phrase(&t.text).contains(&reference))) {
             return Some("실제 대화에서 확인되는 값만 발췌한다. 불분명하면 추측하지 않는다.");
         }
         if !message.contains(&reference) {
@@ -104,18 +121,19 @@ fn revision_needed(proposal: &Proposal, turns: &[Turn]) -> Option<&'static str> 
 async fn suggest(writer: &str, draft: &str, turns: Vec<Turn>) -> Option<String> {
     let mut input = json!({"writer": writer, "recent_messages": &turns, "draft": draft});
     let schema = json!({"type":"object", "additionalProperties":false,
-        "required":["question_focus","resolved_references","suggestion"],
-        "properties":{"question_focus":{"type":["string","null"]},
+        "required":["question_kind","resolved_references","suggestion"],
+        "properties":{"question_kind":{"type":"string","enum":["time","other","none"]},
             "resolved_references":{"type":"array","items":{"type":"string"}},"suggestion":{"type":"string"}}});
     let budget = draft.chars().count().saturating_mul(3).clamp(384, 4096) as u32;
     for _ in 0..2 {
-        let answer = ai_transport::structured_response(&input.to_string(), Some(INSTRUCTIONS), schema.clone(), budget).await?;
+        let answer = ai_transport::structured_response("gpt-4.1-mini", &input.to_string(), Some(INSTRUCTIONS), schema.clone(), budget).await?;
         let proposal: Proposal = serde_json::from_value(answer).ok()?;
-        match revision_needed(&proposal, &turns) {
+        match revision_needed(&proposal, draft, &turns) {
             None => return Some(proposal.suggestion.trim().to_owned()),
             Some(issue) => input["revision"] = json!({"previous":proposal.suggestion,"issue":issue}),
         }
     }
+    eprintln!("Rewrite did not retain a question or a grounded selection after revision");
     None
 }
 
@@ -189,21 +207,28 @@ mod tests {
 
     #[test]
     fn a_time_question_and_a_selected_option_must_survive_the_edit() {
-        let mut proposal = Proposal { question_focus: Some("언제".into()), resolved_references: vec![],
+        let waiting = "대체 언제 와? 나 벌써 20분 기다렸어.";
+        let selection = "첫 번째 말고 두 번째로 부탁드려요.";
+        let mut proposal = Proposal { question_kind: Question::Time, resolved_references: vec![],
             suggestion: "얼른 와. 나 20분이나 기다렸어.".into() };
-        assert!(revision_needed(&proposal, &[]).is_some());
-        proposal.suggestion = "언제쯤 도착할 것 같아? 나 여기서 20분 기다렸어.".into();
-        assert!(revision_needed(&proposal, &[]).is_none());
+        assert!(revision_needed(&proposal, waiting, &[]).is_some());
+        proposal.suggestion = "여기서 20분쯤 기다렸어. 얼른 와줄래?".into();
+        assert!(revision_needed(&proposal, waiting, &[]).is_some());
+        proposal.suggestion = "몇 시쯤 도착할 것 같아? 나 여기서 20분 기다렸어.".into();
+        proposal.resolved_references = vec!["20분".into()];
+        assert!(revision_needed(&proposal, waiting, &[]).is_none());
+        proposal.suggestion = "나 여기서 20분 기다렸어. 도착 예상 시간을 알려줄래?".into();
+        assert!(revision_needed(&proposal, waiting, &[]).is_none());
         let mut turns = transcript(1);
         turns[0].text = "첫 번째는 화요일 오후 2시, 두 번째는 금요일 오전 10시입니다.".into();
-        proposal.question_focus = None;
+        proposal.question_kind = Question::None;
         proposal.resolved_references = vec!["금요일 오전 10시".into()];
         proposal.suggestion = "두 번째로 부탁드려요.".into();
-        assert!(revision_needed(&proposal, &turns).is_some());
+        assert!(revision_needed(&proposal, selection, &turns).is_some());
         proposal.suggestion = "금요일 오전 10시로 부탁드려요.".into();
-        assert!(revision_needed(&proposal, &turns).is_none());
+        assert!(revision_needed(&proposal, selection, &turns).is_none());
         proposal.resolved_references = vec!["금요일 오후 10시".into()];
-        assert!(revision_needed(&proposal, &turns).is_some());
+        assert!(revision_needed(&proposal, selection, &turns).is_some());
     }
 
     #[tokio::test]

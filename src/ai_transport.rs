@@ -11,10 +11,10 @@ pub fn output_text(value: &Value) -> Option<String> {
         .filter_map(|part| part["text"].as_str()).collect::<Vec<_>>().join("");
     if text.trim().is_empty() { None } else { Some(text.trim().to_string()) }
 }
-async fn response(input: &str, instructions: Option<&str>, format: Value, max_tokens: u32) -> Option<String> {
+async fn response(model: &str, input: &str, instructions: Option<&str>, format: Value, max_tokens: u32) -> Option<String> {
     let key = env::var("OPENAI_API_KEY").ok().filter(|key| !key.trim().is_empty())?;
     let client = reqwest::Client::builder().timeout(Duration::from_secs(15)).build().ok()?;
-    let mut payload = json!({"model":"gpt-4o-mini","input":input,"max_output_tokens":max_tokens,"store":false,"text":{"format":format}});
+    let mut payload = json!({"model":model,"input":input,"max_output_tokens":max_tokens,"store":false,"text":{"format":format}});
     if let Some(instructions) = instructions {
         payload["instructions"] = json!(instructions);
     }
@@ -34,10 +34,10 @@ async fn response(input: &str, instructions: Option<&str>, format: Value, max_to
     result
 }
 pub async fn json_response(prompt: &str, schema: Value, max_tokens: u32) -> Option<Value> {
-    structured_response(prompt, None, schema, max_tokens).await
+    structured_response("gpt-4o-mini", prompt, None, schema, max_tokens).await
 }
-pub async fn structured_response(input: &str, instructions: Option<&str>, schema: Value, max_tokens: u32) -> Option<Value> {
-    let text = response(input, instructions, json!({"type":"json_schema","name":"retone_result","strict":true,"schema":schema}), max_tokens).await?;
+pub async fn structured_response(model: &str, input: &str, instructions: Option<&str>, schema: Value, max_tokens: u32) -> Option<Value> {
+    let text = response(model, input, instructions, json!({"type":"json_schema","name":"retone_result","strict":true,"schema":schema}), max_tokens).await?;
     serde_json::from_str(&text).ok()
 }
 pub fn check_schema() -> Value {
