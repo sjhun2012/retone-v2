@@ -22,8 +22,10 @@ async function signup(prefix) {
   });
 }
 
-async function openChat(browser, user, room, errors) {
-  const context = await browser.newContext();
+async function openChat(browser, user, room, errors, mobile = false) {
+  const context = await browser.newContext(mobile
+    ? {viewport: {width: 390, height: 844}, isMobile: true, hasTouch: true}
+    : {});
   await context.addInitScript(account => {
     sessionStorage.setItem('retone-v2-name', account.name);
     sessionStorage.setItem('retone-v2-user-id', account.id);
@@ -76,7 +78,7 @@ async function verify() {
   try {
     const errors = [];
     const [sender, peer] = await Promise.all([
-      openChat(browser, writer, room, errors), openChat(browser, reader, room, errors)
+      openChat(browser, writer, room, errors), openChat(browser, reader, room, errors, true)
     ]);
     // Record even a transient unwanted offer/editor between assertions.
     await peer.evaluate(() => {
@@ -133,13 +135,26 @@ async function verify() {
     await peer.route(`**/api/rooms/${room.id}/messages`, route => route.abort());
     const peerDocument = await peer.evaluateHandle(() => document);
     await bubble(peer, invite).waitFor();
+    await bubble(sender, invite).hover();
+    const beforeDelete = performance.now();
     await bubble(sender, invite).getByTitle('메시지 삭제').click();
     await bubble(peer, invite).waitFor({state: 'detached', timeout: 4000});
+    console.log(`Delete click to disappearance on peer: ${Math.round(performance.now() - beforeDelete)} ms`);
     await bubble(sender, invite).waitFor({state: 'detached'});
     assert.equal(await peer.evaluate(previous => document === previous, peerDocument), true);
     assert.equal(await bubble(peer, question).count(), 1);
     assert.equal(await bubble(peer, acknowledgement).count(), 1);
     assert.deepEqual(await peer.evaluate(() => window.unwantedScheduleUi), []);
+    await peer.unroute(`**/api/rooms/${room.id}/messages`);
+    await bubble(peer, acknowledgement).getByTitle('메시지 삭제').tap();
+    await bubble(sender, acknowledgement).waitFor({state: 'detached'});
+    // Reopening takes a fresh server snapshot and cannot resurrect either message.
+    await peer.locator('.chat .back').tap();
+    await peer.locator(`.rooms [data-room-id="${room.id}"]`).tap();
+    await bubble(peer, question).waitFor();
+    assert.equal(await bubble(peer, invite).count(), 0);
+    assert.equal(await bubble(peer, acknowledgement).count(), 0);
+    assert.equal(await peer.locator('[data-schedule-offer]').count(), 0);
     assert.deepEqual(errors, []);
     const {verifyScheduleApi} = await import('./schedule-api.mjs');
     const secondInvite = await post(`/api/rooms/${room.id}/messages`, {sender: writer.name, body: '금요일 영화 보자.'});

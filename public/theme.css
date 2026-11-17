@@ -105,3 +105,13 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline-color:
   font: inherit;
   font-size: 0.82rem;
 }
+.bubble.mine .delete-message {
+  display: block;
+}
+@media (hover: hover) and (pointer: fine) {
+  .bubble.mine:not(:hover):not(:focus-within) .delete-message { opacity: 0; }
+}
+@media (hover: none) {
+  .bubble.mine { padding-right: 35px; }
+  .bubble.mine .delete-message { width: 26px; height: 26px; }
+}

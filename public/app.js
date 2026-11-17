@@ -210,7 +210,7 @@ function handleChatInput(value){
 }
 
 function isCurrentSendView(view){
-  return view.userId===signedInId && view.room===roomId &&
+  return nav==='chat' && view.userId===signedInId && view.room===roomId &&
     view.list && view.list===document.querySelector('.chat #messages');
 }
 
@@ -406,6 +406,8 @@ async function saveStatusMessage(){
 }
 async function settings(){
   nav='settings';
+  roomId=null;
+  stopMessageFeed();
   try{await loadUserAvatars()}catch{}
   const mine=userProfilesById[signedInId]||{},avatar=mine.avatar_url||localStorage.getItem(avatarStorageKey()),status=mine.status_message?.trim()||'';
   app.innerHTML=`<main class="layout android-layout">${rail()}<section class="page"><header class="head"><h1>설정</h1></header><div class="content"><div class="rooms"><label class="room"><span class="avatar">${avatarMarkup(signedIn,avatar)}</span><span class="copy"><b>프로필 사진 바꾸기</b><span>이 계정의 친구·채팅 화면에 표시돼요.</span></span><input hidden type="file" accept="image/*" onchange="setAvatar(this)"></label><section class="profile-status"><b>상태메시지</b><p>${status?`현재 상태: ${esc(status)}`:'친구에게 보여줄 짧은 한마디를 적어 보세요.'}</p><div><input id="status-message" maxlength="60" value="" placeholder="${status?'새 상태메시지 입력':'예: 오늘은 답장이 조금 늦어요'}"><button onclick="saveStatusMessage()">저장</button></div></section><button class="room" onclick="showAiPolicy()"><span class="avatar">✦</span><span class="copy"><b>AI 사용 안내</b><span>대화 도움의 사용 범위를 확인해요.</span></span></button><button class="room danger" onclick="deleteMyAccount()"><span class="avatar">−</span><span class="copy"><b>회원탈퇴</b><span>이 앱의 계정과 데모 데이터를 삭제해요.</span></span></button><button class="room" onclick="logout()"><span class="avatar">↪</span><span class="copy"><b>로그아웃</b><span>이 기기에서 안전하게 로그아웃해요.</span></span></button></div></div></section>${androidNav()}</main>`;
