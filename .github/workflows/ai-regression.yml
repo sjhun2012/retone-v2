@@ -16,3 +16,17 @@ jobs:
       - run: cargo test --locked
       - run: node --check public/app.js
       - run: node tests/frontend.mjs
+      - run: node tests/outgoing-schedules.mjs
+      - name: Check schedule editor in Chrome
+        run: |
+          google-chrome --headless --disable-gpu --allow-file-access-from-files --dump-dom "file://$PWD/tests/schedule-editor.html" > "$RUNNER_TEMP/card-editor.html"
+          grep -F '<pre id="result">PASS: schedule editor regression</pre>' "$RUNNER_TEMP/card-editor.html"
+      - name: Test chat and deletion between two browser sessions
+        run: |
+          cargo build --locked
+          npm install --no-audit --no-fund --prefix "$RUNNER_TEMP/retone-browser" playwright-core@1.56.1
+          PORT=4000 ./target/debug/retone-v2 &
+          server_pid=$!
+          trap 'kill "$server_pid"' EXIT
+          curl --fail --retry 10 --retry-connrefused --retry-delay 1 http://127.0.0.1:4000/api/health
+          NODE_PATH="$RUNNER_TEMP/retone-browser/node_modules" CHROME_PATH="$(command -v google-chrome)" node tests/chat-flow.cjs

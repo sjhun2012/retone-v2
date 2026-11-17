@@ -1326,6 +1326,7 @@ dependencies = [
  "argon2",
  "axum",
  "chrono",
+ "futures-util",
  "password-hash",
  "rand_core 0.6.4",
  "reqwest",

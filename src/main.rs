@@ -3,18 +3,20 @@ mod ai_transport;
 use argon2::{Argon2, PasswordHash, PasswordHasher, PasswordVerifier};
 use axum::{
     Json, Router,
-    extract::{Path, State},
+    extract::{Path, Query, State},
     http::StatusCode,
+    response::sse::{Event, KeepAlive, Sse},
     routing::{delete, get, patch, post},
 };
 use chrono::Utc;
+use futures_util::stream::{self, Stream};
 use password_hash::SaltString;
 use rand_core::OsRng;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use sqlx::{PgPool, postgres::PgPoolOptions};
-use std::{env, net::SocketAddr, sync::Arc};
-use tokio::sync::RwLock;
+use std::{convert::Infallible, env, net::SocketAddr, sync::Arc};
+use tokio::sync::{RwLock, broadcast};
 use tower_http::services::ServeDir;
 use uuid::Uuid;
 
@@ -104,6 +106,7 @@ struct Friendship {
 struct App {
     data: Arc<RwLock<Data>>,
     db: Option<PgPool>,
+    deletions: broadcast::Sender<(String, String)>,
 }
 #[derive(Deserialize)]
 struct Send {
@@ -145,6 +148,7 @@ struct NewAgreement {
 }
 #[derive(Deserialize)]
 struct NewAppointment {
+    client_id: Option<Uuid>,
     title: String,
     date: Option<String>,
     place: Option<String>,
@@ -161,8 +165,12 @@ struct UpdateAppointment {
 #[derive(Deserialize)]
 struct ScheduleCheck {
     text: String,
-    context: Option<Vec<String>>,
-    sender: String,
+}
+#[derive(Deserialize)]
+struct ScheduleDetection {
+    is_schedule: bool,
+    title: String,
+    fields: Vec<ScheduleFieldInput>,
 }
 #[derive(Deserialize)]
 struct Credentials {
@@ -624,52 +632,99 @@ async fn ai_rewrite(Json(input): Json<RewriteRequest>) -> Json<serde_json::Value
 
 async fn ai_schedule(Json(input): Json<ScheduleCheck>) -> Json<serde_json::Value> {
     let text = input.text.trim();
-    // Every non-acknowledgement reaches the AI schedule classifier. The
-    // short acknowledgement guard remains to avoid repeating a prior proposal.
-    if ai_rules::schedule_acknowledgement(text) {
+    if ai_rules::schedule_reply_only(text) {
         return Json(serde_json::json!({"is_schedule":false,"source":"rules"}));
     }
-    let context = input
-        .context
-        .as_deref()
-        .unwrap_or(&[])
-        .iter()
-        .take(6)
-        .cloned()
-        .collect::<Vec<_>>()
-        .join("\n");
-    let prompt = format!(
-        "너는 채팅에서 새 일정·약속·할 일을 찾는 도우미다. 앞으로 할 일을 제안하거나 확정하는 문장만 true다. 함께 만나거나 놀거나 어디 가자는 새 제안, '내일 도서관에서 같이 공부할래?', '금요일 저녁에 밥 먹자.', '점심에 만나서 식사하자.' 같은 약속 제안, '피피티 만들어줘', '발표 준비하자', '금요일까지 보고서 내자' 같은 구체적인 할 일 요청은 true다. 이미 진행 중인 약속에서 하는 재촉·항의·상태 확인은 일정이 아니다. '왜 안 와?', '빨리 와', '언제 와?', '지금 8시 30분이잖아'는 절대 false다. 단순 인사·과거 회상·가정도 false다. true라면 JSON만 출력: {{\"is_schedule\":true,\"title\":\"일정\",\"fields\":[{{\"label\":\"할일\",\"value\":string}},{{\"label\":\"누구\",\"value\":string}},{{\"label\":\"언제\",\"value\":string}},{{\"label\":\"어디\",\"value\":string}},...]}}. fields에는 반드시 할일·누구·언제·어디를 이 순서로 포함한다. 알 수 없는 값은 반드시 빈 문자열로 두고 '미정'이나 추측을 쓰지 마라. 예를 들어 '피피티 만들어줘'는 할일='피피티 만들기', 나머지는 빈 문자열이다. '금요일까지 바나나가 피피티 만들어'는 할일='피피티 만들기', 누구='바나나', 언제='금요일', 어디=''다. 필요할 때만 세부사항을 추가한다. false라면 {{\"is_schedule\":false,\"title\":\"\",\"fields\":[]}}만 출력한다.\n보낸 사람: {}\n최근 대화:\n{}\n현재 메시지: {}",
-        input.sender.trim(), context, text
-    );
-    let parsed = match ai_transport::json_response(&prompt, ai_transport::schedule_schema(), 700).await {
-        Some(value) if value["is_schedule"].is_boolean() => value,
-        _ => return Json(serde_json::json!({"is_schedule":false,"source":"unavailable","error":"AI_SCHEDULE_UNAVAILABLE"})),
+    // Only the just-sent message is evidence of intent. Older clients can
+    // send extra JSON keys; ScheduleCheck never forwards them to the model.
+    let prompt = format!("아래 메시지 한 개의 작성자가 직접 새 만남이나 할 일을 제안·요청하는지 판정한다. \
+        '만날래?', '야 내일 만날래?', '내일 카페에서 보자.', '이번 주말 같이 갈까?', '금요일까지 자료 보내줘'는 true다. \
+        수락, 거절, 확인 질문, 이모지, 취소, 재촉, 단순 시간·장소 답변, 과거 회상, 남의 제안 인용은 false다. \
+        예: '?', '그래, 좋아!', '내일은 좀 힘들어', '몇 시에?', '왜 안 와?', '친구가 내일 만나자고 했어'는 false다. \
+        거절하거나 수락하며 다른 약속을 직접 제안하면 새 제안에 대해서만 true다. \
+        true이면 짧은 제목과 할일·누구·언제·어디를 추출하고 명시된 세부사항만 추가한다. \
+        추측할 수밖에 없는 항목은 빈 문자열로 둔다. false이면 제목을 비우고 fields를 빈 배열로 둔다.\n메시지(JSON 문자열): {}",
+        serde_json::json!(text));
+    let detection = ai_transport::json_response(&prompt, ai_transport::schedule_schema(), 700).await
+        .and_then(|value| serde_json::from_value::<ScheduleDetection>(value).ok());
+    Json(schedule_result(text, detection))
+}
+
+fn schedule_result(text: &str, detection: Option<ScheduleDetection>) -> serde_json::Value {
+    use serde_json::json;
+    let (title, proposed, source) = match detection {
+        Some(result) if result.is_schedule => (result.title, result.fields, "ai"),
+        Some(_) => return json!({"is_schedule":false,"source":"ai"}),
+        None => {
+            let Some(plan) = ai_rules::local_plan(text) else {
+                return json!({"is_schedule":false,"source":"unavailable","error":"AI_SCHEDULE_UNAVAILABLE"});
+            };
+            let fields = [("할일", plan.task), ("누구", plan.who), ("언제", plan.when), ("어디", plan.place)]
+                .into_iter().map(|(label, value)| ScheduleFieldInput { label: label.into(), value })
+                .collect();
+            ("새 일정".into(), fields, "rules")
+        }
     };
-    if !parsed["is_schedule"].as_bool().unwrap_or(false) {
-        return Json(serde_json::json!({"is_schedule":false}));
-    }
-    let mut fields = parsed["fields"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .filter_map(|field| Some(ScheduleFieldInput {
-            label: field["label"].as_str()?.trim().to_string(),
-            value: field["value"].as_str()?.trim().to_string(),
-        }))
-        .collect::<Vec<_>>();
-    for label in ["할일", "누구", "언제", "어디"] {
-        if !fields.iter().any(|field| field.label == label) {
-            fields.push(ScheduleFieldInput { label: label.into(), value: String::new() });
+    let mut fields: Vec<_> = ["할일", "누구", "언제", "어디"].into_iter().map(|label| {
+        let value = proposed.iter().find(|field| field.label.trim() == label)
+            .map(|field| field.value.trim()).unwrap_or_default();
+        json!({"label":label,"value":value})
+    }).collect();
+    for field in proposed {
+        let label = field.label.trim();
+        if fields.len() == 12 { break; }
+        if !label.is_empty() && !fields.iter().any(|f| f["label"] == label) {
+            fields.push(json!({"label":label,"value":field.value.trim()}));
         }
     }
-    let fields = schedule_fields(fields);
-    Json(serde_json::json!({
-        "is_schedule":true,
-        "title":parsed["title"].as_str().unwrap_or("새 일정").trim(),
-        "fields":fields.into_iter().map(|field| serde_json::json!({"label":field.label,"value":field.value})).collect::<Vec<_>>()
-    }))
+    let title = title.trim();
+    json!({"is_schedule":true,"title":if title.is_empty() { "새 일정" } else { title },"fields":fields,"source":source})
 }
+
+#[cfg(test)]
+mod schedule_tests {
+    use super::*;
+    use serde_json::json;
+
+    #[tokio::test]
+    async fn old_clients_cannot_turn_reactions_into_proposals_with_room_history() {
+        for reply in ["?", "？？", "👍", "그래, 좋아!", "ㅇㅋ", "몇 시에?"] {
+            let payload = json!({"text":reply,"sender":"바나나","context":["신지훈: 야 내일 만날래?"]});
+            let input = serde_json::from_value(payload).unwrap();
+            let Json(result) = ai_schedule(Json(input)).await;
+            assert_eq!(result, json!({"is_schedule":false,"source":"rules"}), "{reply}");
+        }
+    }
+
+    #[test]
+    fn outage_can_still_suggest_an_explicit_meeting() {
+        for proposal in ["야 내일 만날래?", "내일 카페에서 보자."] {
+            let result = schedule_result(proposal, None);
+            assert_eq!(result["is_schedule"], true);
+            assert_eq!(result["source"], "rules");
+            assert_eq!(result["fields"][2], json!({"label":"언제","value":"내일"}));
+        }
+        assert_eq!(schedule_result("?", None)["is_schedule"], false);
+        assert_eq!(schedule_result("내일은 힘들어", None)["is_schedule"], false);
+    }
+
+    #[test]
+    fn model_fields_keep_their_values_and_blank_fields_stay_blank() {
+        let detection = serde_json::from_value(json!({
+            "is_schedule":true,"title":"카페 약속","fields":[
+                {"label":"어디","value":"카페"}, {"label":"준비물","value":"책"},
+                {"label":"할일","value":"독서"}, {"label":"할일","value":"중복"}
+            ]
+        })).unwrap();
+        let result = schedule_result("카페에서 같이 책 읽을래?", Some(detection));
+        assert_eq!(result["fields"], json!([
+            {"label":"할일","value":"독서"}, {"label":"누구","value":""},
+            {"label":"언제","value":""}, {"label":"어디","value":"카페"},
+            {"label":"준비물","value":"책"}
+        ]));
+    }
+}
+
 async fn ai_support(Json(input): Json<RewriteRequest>) -> Json<serde_json::Value> {
     let text = input.text.trim();
     let Some(key) = env::var("OPENAI_API_KEY").ok() else {
@@ -873,19 +928,58 @@ async fn send(
     }
     Ok(Json(message))
 }
+#[derive(Deserialize)]
+struct RoomSubscriber {
+    user_id: String,
+}
+
+async fn room_message_events(
+    State(app): State<App>,
+    Path(room_id): Path<String>,
+    Query(user): Query<RoomSubscriber>,
+) -> Result<Sse<impl Stream<Item = Result<Event, Infallible>>>, StatusCode> {
+    let data = app.data.read().await;
+    let room = data.rooms.iter().find(|room| room.id == room_id).ok_or(StatusCode::NOT_FOUND)?;
+    if !room.participant_ids.contains(&user.user_id) {
+        return Err(StatusCode::FORBIDDEN);
+    }
+    let receiver = app.deletions.subscribe();
+    drop(data);
+    let events = stream::unfold((receiver, room_id), |(mut receiver, room_id)| async move {
+        loop {
+            let event = match receiver.recv().await {
+                Ok((room, message)) if room == room_id => Event::default().event("deleted").data(message),
+                Ok(_) => continue,
+                Err(broadcast::error::RecvError::Lagged(_)) => Event::default().event("resync").data(""),
+                Err(broadcast::error::RecvError::Closed) => return None,
+            };
+            return Some((Ok(event), (receiver, room_id)));
+        }
+    });
+    Ok(Sse::new(events).keep_alive(KeepAlive::default()))
+}
+
 async fn delete_message(
     State(app): State<App>,
     Path((room_id, message_id)): Path<(String, String)>,
 ) -> StatusCode {
     let mut d = app.data.write().await;
-    let before = d.messages.len();
-    d.messages
-        .retain(|m| !(m.room_id == room_id && m.id == message_id));
-    if d.messages.len() < before {
-        StatusCode::NO_CONTENT
-    } else {
-        StatusCode::NOT_FOUND
+    let Some(index) = d.messages.iter().position(|m| m.room_id == room_id && m.id == message_id) else {
+        return StatusCode::NOT_FOUND;
+    };
+    d.messages.remove(index);
+    let last = d.messages.iter().rev().find(|m| m.room_id == room_id)
+        .map(|m| (m.body.clone(), m.created));
+    if let Some(room) = d.rooms.iter_mut().find(|r| r.id == room_id) {
+        if let Some((body, created)) = last {
+            room.last = body;
+            room.updated = created;
+        } else {
+            room.last = "새 대화를 시작해 보세요.".into();
+        }
     }
+    let _ = app.deletions.send((room_id, message_id));
+    StatusCode::NO_CONTENT
 }
 async fn mark_messages_read(
     State(app): State<App>,
@@ -1041,7 +1135,7 @@ async fn create_appointment(
     State(app): State<App>,
     Json(input): Json<NewAppointment>,
 ) -> Result<Json<Appointment>, StatusCode> {
-    let NewAppointment { title, date, place, fields, creator, source_message_id, room_id } = input;
+    let NewAppointment { client_id, title, date, place, fields, creator, source_message_id, room_id } = input;
     let title = title.trim();
     if title.is_empty() {
         return Err(StatusCode::BAD_REQUEST);
@@ -1050,13 +1144,24 @@ async fn create_appointment(
     let source_message_id = source_message_id.as_deref().map(str::trim).filter(|id| !id.is_empty()).map(str::to_string);
     let fields = schedule_fields(fields.unwrap_or_else(|| default_schedule_fields(&creator, date.as_deref(), place.as_deref())));
     let mut data = app.data.write().await;
-    if let Some(source_message_id) = &source_message_id {
-        if let Some(existing) = data.appointments.iter().find(|appointment| appointment.source_message_id.as_ref() == Some(source_message_id)) {
-            return Ok(Json(existing.clone()));
+    let mut room_id = room_id.as_deref().map(str::trim).filter(|id| !id.is_empty()).map(str::to_string);
+    let id = client_id.unwrap_or_else(Uuid::new_v4).to_string();
+    if let Some(existing) = data.appointments.iter().find(|item| item.id == id ||
+        (source_message_id.is_some() && item.source_message_id == source_message_id)) {
+        if existing.creator != creator || existing.source_message_id != source_message_id ||
+            (room_id.is_some() && existing.room_id != room_id) {
+            return Err(StatusCode::CONFLICT);
         }
+        return Ok(Json(existing.clone()));
     }
-    let room_id = room_id.as_deref().map(str::trim).filter(|id| !id.is_empty()).map(str::to_string);
-    let appointment = Appointment { id: Uuid::new_v4().to_string(), title: title.chars().take(80).collect(), fields, creator, source_message_id, room_id };
+    if let Some(source_id) = &source_message_id {
+        let source = data.messages.iter().find(|message| &message.id == source_id).ok_or(StatusCode::NOT_FOUND)?;
+        if source.sender != creator || room_id.as_ref().is_some_and(|room| room != &source.room_id) {
+            return Err(StatusCode::BAD_REQUEST);
+        }
+        room_id = Some(source.room_id.clone());
+    }
+    let appointment = Appointment { id, title: title.chars().take(80).collect(), fields, creator, source_message_id, room_id };
     data.appointments.push(appointment.clone());
     Ok(Json(appointment))
 }
@@ -1133,6 +1238,7 @@ async fn main() {
     let db = prepare_storage().await;
     let app_state = App {
         db,
+        deletions: broadcast::channel(256).0,
         data: Arc::new(RwLock::new(Data {
             users: vec![],
             rooms: vec![],
@@ -1174,6 +1280,7 @@ async fn main() {
         .route("/api/appointments/{id}", patch(update_appointment).delete(delete_appointment))
         .route("/api/appointments/{id}/creator/{creator}", patch(update_own_appointment).delete(delete_own_appointment))
         .route("/api/rooms/{id}/messages", get(messages).post(send))
+        .route("/api/rooms/{id}/message-events", get(room_message_events))
         .route("/api/rooms/{id}/read", post(mark_messages_read))
         .route(
             "/api/rooms/{room_id}/messages/{message_id}",
