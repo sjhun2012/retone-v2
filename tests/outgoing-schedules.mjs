@@ -55,6 +55,7 @@ const context = vm.createContext({
     return bubble;
   }
 });
+vm.runInContext(fs.readFileSync(new URL('../public/rewrite.js', import.meta.url), 'utf8'), context);
 vm.runInContext(source, context);
 vm.runInContext(`signedIn='가'; signedInId='A'; roomId='room';
   api=request; displaySentMessage=display; showScheduleProposal=(msg)=>clicked.push(msg.id);`, context);

@@ -60,29 +60,6 @@ pub fn unverified_sensitive_claim(text: &str) -> bool {
     domain && assertion && !addressed
 }
 
-pub fn rewrite_fallback(text: &str, context: &str) -> Option<String> {
-    let t = compact(text);
-    if ["알빠야", "내알바야", "니상관아니야", "네상관아니야"].iter().any(|s| t.contains(s)) && context.contains("[상대]") && ["왜안와", "늦었", "기다렸"].iter().any(|s| compact(context).contains(s)) {
-        return Some("늦어서 미안해. 다음에는 미리 연락할게.".into());
-    }
-    if strong_expression(text).is_some() || hostility(text).is_some() {
-        // Do not invent another person's actions or a deadline. Keep an explicit
-        // request/question when possible and remove the attacking clause.
-        if let Some((_, request)) = text.rsplit_once(['.', '!', '?']) {
-            let request = request.trim();
-            if !request.is_empty() && is_task(request) && strong_expression(request).is_none() && hostility(request).is_none() {
-                return Some(format!("지금은 조금 답답해. {request}"));
-            }
-        }
-        return Some(if t.contains("꺼져") { "지금은 감정을 가라앉힐 시간이 필요해. 잠시 뒤에 이야기하자." } else if t.contains("생각만") { "내 의견도 함께 들어줬으면 좋겠어. 서로 생각을 차분히 이야기하자." } else if t.contains("멍청") { "지금 답답한 마음이 들어. 어떤 부분이 어려웠는지 차분히 이야기하고 싶어." } else { "지금 많이 답답해. 서로 존중하면서 차분히 이야기하고 싶어." }.into());
-    }
-    None
-}
-
-pub fn is_task(text: &str) -> bool {
-    let t = compact(text);
-    ["만나자", "만날래", "만납시다", "만나요", "놀자", "가자", "갑시다", "이야기해도될까", "만들어줘", "만들어주세요", "작성해줘", "작성해주세요", "정리해줘", "정리해주세요", "보내줘", "보내주세요", "제출해", "준비하자", "준비합시다", "준비할래", "회의하자", "회의합시다", "도와줄수있", "도와줘", "예약해줘", "확인해줘", "발표하자", "내자"].iter().any(|s| t.contains(s))
-}
 fn schedule_words(text: &str) -> String {
     text.to_lowercase().chars().filter(|c| c.is_alphanumeric()).collect()
 }
@@ -201,13 +178,6 @@ mod tests {
         for text in ["내일 만날래?", "내일 만날래?", "우리 주말에 영화 보러 가자", "금요일까지 보고서 작성해줘", "좋아, 그럼 목요일에 카페에서 보자", "내일 저녁 치맥 어때?"] {
             assert!(!schedule_reply_only(text), "{text}");
         }
-    }
-    #[test] fn rewrites_preserve_request() {
-        assert!(rewrite_fallback("너 진짜 병신이냐?", "").is_some());
-        assert!(rewrite_fallback("씨발! 내일 3시까지 피피티 만들어줘", "").unwrap().contains("내일 3시까지"));
-        let rewritten = rewrite_fallback("너는 정말 멍청해서 아무것도 못하네", "나: 안녕, 오늘 어땠어?").unwrap();
-        assert!(rewritten.contains("답답한 마음"));
-        assert!(!rewritten.contains("안녕"));
     }
     #[test] fn sensitive_claims_are_not_interpersonal_attacks() {
         for text in ["이 약을 먹으면 모든 감기가 하루 만에 낫는대", "이 코인은 다음 달에 반드시 두 배가 된대", "미성년자가 서명한 계약은 무조건 다 무효래", "우리 동네에 곧 대피 명령이 내려진대"] {
