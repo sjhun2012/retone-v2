@@ -1,0 +1,98 @@
+<!doctype html>
+<html lang="ko"><meta charset="utf-8"><title>Schedule editor regression</title>
+<body>
+  <div id="room-schedule-notice"></div>
+  <article data-message-id="m1"><button data-schedule-offer></button></article>
+  <pre id="result">Running schedule editor test</pre>
+  <script src="../public/schedule-cards.js"></script>
+  <script type="module">
+    // Real DOM events and the same popup wrapper used by the application.
+    Object.assign(window, {
+      esc: value => String(value ?? '').replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;'),
+      signedIn: '지훈', signedInId: 'writer', roomId: 'room-a',
+      data: {appointments: []},
+      accessibleRooms: () => [{id: 'room-a'}],
+      popup: html => document.body.insertAdjacentHTML('beforeend', '<div class="modal"><section>' + html + '</section></div>')
+    });
+    const result = document.querySelector('#result');
+    const assert = (condition, message) => { if (!condition) throw Error(message); };
+    const currentForm = () => document.querySelector('#schedule-editor');
+    const titleInput = () => currentForm().elements.namedItem('title');
+    const message = {id: 'm1', room_id: 'room-a', sender: '지훈'};
+    const proposal = {title: '원래 "약속"', fields: [
+      {label: '할일', value: '추천 내용'}, {label: '누구', value: '지훈'},
+      {label: '언제', value: '내일'}, {label: '어디', value: '추천 장소'}
+    ]};
+    const requests = [];
+    let fail = true;
+    window.api = async (url, options) => {
+      const payload = JSON.parse(options.body);
+      requests.push({url, method: options.method, payload});
+      if (fail) throw Error('offline');
+      return {...window.data.appointments[0], ...payload, id: 'saved'};
+    };
+    const submit = async () => {
+      currentForm().dispatchEvent(new Event('submit', {bubbles: true, cancelable: true}));
+      await Promise.resolve();
+    };
+    try {
+      showScheduleProposal({...message, sender: '바나나'}, proposal);
+      showScheduleProposal({...message, room_id: 'room-b'}, proposal);
+      assert(!currentForm(), 'An inactive room or recipient opened an editor');
+      showScheduleProposal(message, proposal);
+      assert(titleInput().value === proposal.title, 'Quoted title did not survive');
+      titleInput().value = '';
+      await submit();
+      assert(requests.length === 0 && !currentForm().querySelector('[data-error]').hidden, 'Blank title saved recommendation');
+      titleInput().value = '겨울 영화 모임';
+      const values = () => [...currentForm().querySelectorAll('[name=value]')];
+      values()[0].value = '영화 보기';
+      values()[1].value = '';
+      values()[2].value = '금요일 저녁 7시';
+      currentForm().querySelectorAll('[data-remove]')[3].click();
+      currentForm().querySelector('[data-add]').click();
+      currentForm().querySelectorAll('[name=label]')[3].value = '준비물';
+      values()[3].value = '예매표 <2장> & "학생증"';
+      const expected = [
+        {label: '할일', value: '영화 보기'}, {label: '누구', value: ''},
+        {label: '언제', value: '금요일 저녁 7시'}, {label: '준비물', value: '예매표 <2장> & "학생증"'}
+      ];
+      await submit();
+      assert(currentForm() && !currentForm().querySelector('[data-error]').hidden, 'Failed save discarded draft');
+      fail = false;
+      await submit();
+      const payload = requests[1].payload;
+      assert(payload.client_id === requests[0].payload.client_id, 'Retry changed request ID');
+      assert(payload.creator === '지훈' && payload.source_message_id === 'm1' && payload.room_id === 'room-a', 'Source binding lost');
+      assert(payload.title === '겨울 영화 모임' && JSON.stringify(payload.fields) === JSON.stringify(expected), 'Form lost local edits');
+      assert(!currentForm() && !document.querySelector('[data-schedule-offer]'), 'Editor/offer still shown after save');
+      showScheduleProposal(message, proposal);
+      assert(!currentForm() && requests.length === 2, 'Existing card re-created');
+      document.querySelector('.modal').remove();
+      data.appointments.push({id: 'outside', creator: '다른 사람', room_id: 'room-b', title: '다른 방'});
+      signedIn = '바나나'; signedInId = 'reader';
+      document.querySelector('.notice-view').click();
+      let list = document.querySelector('[data-schedule-list]');
+      assert(list.querySelectorAll('dt').length === 4 && list.querySelectorAll('dd')[1].textContent === '비어 있음', 'Peer missing blank detail');
+      assert(list.querySelectorAll('dd')[3].textContent === expected[3].value, 'Peer missing custom detail');
+      assert(!list.querySelector('button') && !list.textContent.includes('다른 방'), 'Peer saw foreign card or edit action');
+      document.querySelector('.modal').remove();
+      signedIn = '지훈'; signedInId = 'writer';
+      showRoomSchedules('room-a');
+      document.querySelector('[data-schedule-list] button').click();
+      titleInput().value = '영화 모임 변경';
+      values()[2].value = '토요일 오후 1시';
+      await submit();
+      assert(requests[2].method === 'PATCH' && requests[2].url.endsWith('/creator/' + encodeURIComponent('지훈')), 'Incorrect edit endpoint');
+      showAllSchedules();
+      list = document.querySelector('[data-schedule-list]');
+      assert(list.textContent.includes('토요일 오후 1시') && !list.textContent.includes('금요일 저녁 7시'), 'Detail retained pre-edit time');
+      document.querySelector('.modal').remove();
+      newAppointment();
+      assert(values().length === 4 && values().every(input => input.value === ''), 'Manual form inherited AI suggestion');
+      currentForm().querySelector('[data-cancel]').click();
+      assert(!currentForm() && requests.length === 3, 'Cancel submitted manual card');
+      result.textContent = 'PASS: schedule editor regression';
+    } catch (error) { result.textContent = 'FAIL: ' + error.message; throw error; }
+  </script>
+</body></html>

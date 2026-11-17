@@ -83,28 +83,34 @@ pub fn is_task(text: &str) -> bool {
     let t = compact(text);
     ["만나자", "만날래", "만납시다", "만나요", "놀자", "가자", "갑시다", "이야기해도될까", "만들어줘", "만들어주세요", "작성해줘", "작성해주세요", "정리해줘", "정리해주세요", "보내줘", "보내주세요", "제출해", "준비하자", "준비합시다", "준비할래", "회의하자", "회의합시다", "도와줄수있", "도와줘", "예약해줘", "확인해줘", "발표하자", "내자"].iter().any(|s| t.contains(s))
 }
-pub fn schedule_acknowledgement(text: &str) -> bool {
-    let t = compact(text);
+fn schedule_words(text: &str) -> String {
+    text.to_lowercase().chars().filter(|c| c.is_alphanumeric()).collect()
+}
+
+fn is_schedule_letter(c: char) -> bool {
+    // Keep medial vowels in decomposed Korean words eligible for AI review.
+    c.is_alphabetic() && !matches!(c, '\u{3130}'..='\u{318f}' | '\u{1100}'..='\u{115f}' | '\u{11a8}'..='\u{11ff}')
+}
+
+pub fn schedule_reply_only(text: &str) -> bool {
+    let words = schedule_words(text);
+    // Punctuation, emoji, digits and isolated Hangul consonants/laughter
+    // convey no actionable proposal on their own.
+    if !words.chars().any(is_schedule_letter) {
+        return true;
+    }
+    let t = words.trim_end_matches(['ㅋ', 'ㅎ', 'ㅠ', 'ㅜ']);
     [
-        "응", "응좋아", "그래좋아", "좋아", "좋아요", "그래", "알겠어", "넵", "네",
-        "ㅇㅋ", "ㅇㅇ", "ok", "okay", "오케이", "콜", "좋지", "가능해", "맞아",
+        "응", "웅", "응응", "응좋아", "그래좋아", "좋아", "좋아요", "그래", "알겠어",
+        "알겠습니다", "알겠어요", "좋습니다", "넵", "넵넵", "네", "네네", "네좋아요",
+        "웅좋아", "응좋아요", "오케이좋아", "그때봐", "그렇구나", "뭐", "뭐야", "무슨뜻이야",
+        "왜", "언제", "언제야", "몇시", "몇시에", "어디", "어디서", "누구랑",
+        "ok", "okay", "yes", "no", "sure", "오케이", "콜", "좋지", "가능해", "맞아",
+        "아니", "아니야", "아뇨", "안돼", "안될것같아", "못가", "다음에", "미안", "싫어",
+        "취소", "취소할게", "약속취소",
         "응좋아내일보자", "좋아내일보자", "그래내일보자", "응내일보자", "그럼좋아",
         "그럼내일보자",
-    ].contains(&t.as_str())
-}
-
-pub fn schedule_negative(text: &str) -> bool {
-    let t = compact(text);
-    if schedule_acknowledgement(text) { return true; }
-    if ["어제", "지난주", "했어", "했어요", "끝났어", "가정하면", "수도있", "취소", "안만나", "가지말자"].iter().any(|s| t.contains(s)) && !is_task(text) { return true; }
-    if ["왜안와", "빨리와", "언제와", "지금와"].iter().any(|s| t.contains(s)) && !is_task(text) { return true; }
-    false
-}
-
-pub fn schedule_candidate(text: &str) -> bool {
-    if schedule_negative(text) { return false; }
-    let t = compact(text);
-    is_task(text) || ["갈래", "보자", "약속", "일정", "모임", "회식", "놀러"].iter().any(|word| t.contains(word))
+    ].contains(&t)
 }
 
 #[derive(Debug, PartialEq)]
@@ -120,23 +126,41 @@ fn when(text: &str) -> String {
 fn place(text: &str) -> String {
     text.split_whitespace().find_map(|w| w.strip_suffix("에서").filter(|s| !s.is_empty())).unwrap_or("").to_string()
 }
-pub fn local_plan(text: &str, context: &[String]) -> Option<Plan> {
-    if !schedule_candidate(text) || !is_task(text) { return None; }
-    let t = compact(text);
-    let mut date = when(text);
-    let mut location = place(text);
-    // Inherit only fields explicitly referred to in this message, from the
-    // most recent plan, never from an unrelated old conversation.
-    if t.contains("거기") || t.contains("그때") || t.contains("그럼") {
-        if let Some(previous) = context.iter().rev().find(|s| s.as_str() != text && is_task(s)) {
-            if date.is_empty() || (t.contains("그럼") && !["내일", "오늘", "모레", "요일", "주말"].iter().any(|s| date.contains(s))) {
-                let earlier = when(previous);
-                let day = earlier.split_whitespace().filter(|w| !w.contains('시') && !w.contains('분') && !w.contains("오전") && !w.contains("오후")).collect::<Vec<_>>().join(" ");
-                date = format!("{day} {date}").trim().to_string();
-            }
-            if location.is_empty() && t.contains("거기") { location = place(previous); }
-        }
+pub fn local_plan(text: &str) -> Option<Plan> {
+    if schedule_reply_only(text) { return None; }
+    if text.trim_end_matches([' ', '.', '?', '!']).ends_with(['"', '\'', '”', '’', '」']) {
+        return None;
     }
+    // A declined first date must not enter the draft for a later counteroffer.
+    // A final cancellation also supersedes an earlier proposal.
+    let text = text.rsplit(['.', '!', '?', '。', '！', '？', '\n'])
+        .map(str::trim).find(|part| part.chars().any(is_schedule_letter))?;
+    if text.starts_with(['"', '\'', '“', '‘', '「']) || text.ends_with(['"', '\'', '”', '’', '」']) {
+        return None;
+    }
+    let t = schedule_words(text);
+    // During an AI outage accept direct proposals and requests only. Match
+    // sentence endings so reporting someone else's invitation is not a plan.
+    let t = t.trim_end_matches(['ㅋ', 'ㅎ']);
+    if ["두고보자", "지켜보자", "알아보자", "어디보자",
+        "취소하자", "취소해줘", "취소해주세요"].iter().any(|phrase| t.ends_with(phrase)) {
+        return None;
+    }
+    let date = when(text);
+    let location = place(text);
+    let affirmative = |ending: &&str| t.strip_suffix(*ending)
+        .is_some_and(|prefix| !prefix.ends_with(['안', '못']));
+    let direct_request = ["만나자", "만날래", "만날래요", "만날까", "만날까요", "만나실래요", "만나요", "만납시다",
+        "놀자", "가자", "갑시다", "밥먹자", "식사하자", "공부하자", "공부할래", "모이자",
+        "이야기해도될까", "만들어줘", "만들어주세요", "작성해줘", "작성해주세요",
+        "정리해줘", "정리해주세요", "보내줘", "보내주세요", "제출해", "준비하자",
+        "준비합시다", "준비할래", "회의하자", "회의합시다", "도와줄수있어",
+        "도와줘", "예약해줘", "확인해줘", "발표하자", "내자"]
+        .iter().any(affirmative);
+    let meeting = ["보자", "볼래", "볼까", "볼까요", "갈래", "갈까", "갈까요", "가실래요", "먹을래", "먹을까", "먹을까요", "봐요"]
+        .iter().any(affirmative)
+        && (!date.is_empty() || !location.is_empty() || t.contains("같이"));
+    if !direct_request && !meeting { return None; }
     let who = text.split_whitespace().next().filter(|w| w.trim_end_matches(',').ends_with('야') || w.trim_end_matches(',').ends_with("님")).map(|w| w.trim_end_matches(',').trim_end_matches('야').to_string()).unwrap_or_default();
     let task = if t == "피피티만들어줘" || t == "ppt만들어줘" { "피피티 만들기".to_string() } else { text.trim().to_string() };
     Some(Plan { task, who, when: date, place: location })
@@ -154,21 +178,28 @@ mod tests {
         for text in ["많이 서운했어", "내 의견은 달라", "그 결과에 동의하기 어려워", "내가 멍청했네"] { assert_eq!(hostility(text), None); }
     }
     #[test] fn requests_and_non_plans() {
-        for text in ["피피티 만들어줘", "민수야 금요일 오후 5시까지 보고서 작성해줘", "회의 자료 정리해서 보내주세요", "혹시 발표 자료 좀 도와줄 수 있어?", "우리 주말에 영화 보러 가자", "내일까지 광합성 발표 자료를 만들어줘", "내일 오후 3시에 회의실에서 발표 준비하자", "다음 주 월요일 오전 10시에 회의합시다", "내일 이야기해도 될까?"] { assert!(local_plan(text, &[]).is_some(), "{text}"); }
-        for text in ["안녕", "과학 발표 주제로 벤포드 법칙은 어때?", "물은 수소와 산소로 이루어져 있어", "왜 안 와? 지금 8시 30분이잖아", "어제 오후 3시에 회의했어", "응 좋아 내일 보자", "그래, 좋아!", "그래 좋아", "좋아. 내일 보자!", "내일 비가 오면 회의를 취소할 수도 있어"] { assert!(local_plan(text, &[]).is_none(), "{text}"); }
+        for text in ["만날래?", "야 내일 만날래?", "내일 카페에서 보자.", "피피티 만들어줘", "민수야 금요일 오후 5시까지 보고서 작성해줘", "회의 자료 정리해서 보내주세요", "혹시 발표 자료 좀 도와줄 수 있어?", "우리 주말에 영화 보러 가자", "내일까지 광합성 발표 자료를 만들어줘", "내일 오후 3시에 회의실에서 발표 준비하자", "다음 주 월요일 오전 10시에 회의합시다", "내일 이야기해도 될까?", "좋아! 다음 주에는 등산 가자", "내일은 힘들어. 금요일에 만나자"] { assert!(local_plan(text).is_some(), "{text}"); }
+        for text in ["안녕", "과학 발표 주제로 벤포드 법칙은 어때?", "물은 수소와 산소로 이루어져 있어", "왜 안 와? 지금 8시 30분이잖아", "어제 오후 3시에 회의했어", "응 좋아 내일 보자", "그래, 좋아!", "그래 좋아", "좋아. 내일 보자!", "내일 비가 오면 회의를 취소할 수도 있어", "내일은 안 만날래", "나는 안 갈래!", "내일은 안 보자", "비가 오니까 약속 취소하자", "내일 만나자고 했대", "내일 두고 보자", "내일은 카페에서?", "오후 5시에"] { assert!(local_plan(text).is_none(), "{text}"); }
     }
-    #[test] fn context_fields_and_no_invention() {
-        let plan = local_plan("그럼 3시에 거기서 만나자", &["민수: 내일 도서관에서 발표 준비할래?".into()]).unwrap();
-        assert_eq!(plan.when, "내일 3시에"); assert_eq!(plan.place, "도서관");
-        let plan = local_plan("피피티 만들어줘", &[]).unwrap();
+    #[test] fn extracts_only_explicit_fields() {
+        let plan = local_plan("내일 오후 3시에 카페에서 보자.").unwrap();
+        assert_eq!(plan.when, "내일 오후 3시에"); assert_eq!(plan.place, "카페");
+        let plan = local_plan("내일은 카페에서 못 봐. 금요일에 도서관에서 볼까요? 😊").unwrap();
+        assert_eq!(plan.when, "금요일에"); assert_eq!(plan.place, "도서관");
+        for text in ["카페에서 만나자. 아, 내일 약속은 취소할게!", "“내일 만날래?”", "마지막 문장은 ‘내일 만날래?’",
+            "내일은 안 갈까요?", "저녁에 안 먹을까요?",
+            "작년에 카페에서 만나기로 했었지?", "친구가 ‘내일 만나자’고 했어"] {
+            assert!(local_plan(text).is_none(), "{text}");
+        }
+        let plan = local_plan("피피티 만들어줘").unwrap();
         assert_eq!((plan.who, plan.when, plan.place), (String::new(), String::new(), String::new()));
     }
-    #[test] fn schedule_candidates_skip_agreements() {
-        for text in ["그래, 좋아!", "그래 좋아", "좋아. 내일 보자!", "응 좋아 내일 보자"] {
-            assert!(!schedule_candidate(text), "{text}");
+    #[test] fn reactions_never_invoke_schedule_ai() {
+        for text in ["", "?", "?!?", "？？", "…", "👍🏽", "🙆‍♀️", "ㅋㅋㅋ", "ᄏᄏ", "ㅇㅋ", "응👍", "좋아요ㅎㅎ", "그래, 좋아!", "그래 좋아", "좋아. 내일 보자!", "응 좋아 내일 보자", "몇 시에?", "어디서?", "ok!", "아니"] {
+            assert!(schedule_reply_only(text), "{text}");
         }
-        for text in ["내일 만날래?", "우리 주말에 영화 보러 가자", "금요일까지 보고서 작성해줘"] {
-            assert!(schedule_candidate(text), "{text}");
+        for text in ["내일 만날래?", "내일 만날래?", "우리 주말에 영화 보러 가자", "금요일까지 보고서 작성해줘", "좋아, 그럼 목요일에 카페에서 보자", "내일 저녁 치맥 어때?"] {
+            assert!(!schedule_reply_only(text), "{text}");
         }
     }
     #[test] fn rewrites_preserve_request() {

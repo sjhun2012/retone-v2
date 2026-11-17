@@ -14,9 +14,21 @@ function showCheckResult(result){if(pendingSend)pendingSend.result=result;const 
 async function rewritePending(){if(!pendingSend)return;const button=document.querySelector('.modal-actions .quiet');if(button){button.disabled=true;button.textContent='표현을 다듬는 중…'}try{const out=await api('/api/ai/rewrite',{method:'POST',body:JSON.stringify({text:pendingSend.body})});if(out.suggestion){pendingSend.body=out.suggestion;editPendingSend()}else{button.textContent='표현 바꾸기'}}catch{button.textContent='표현 바꾸기'}}async function reportAiResult(){if(!pendingSend)return;await api('/api/ai/reports',{method:'POST',body:JSON.stringify({reporter_name:signedIn,original_text:pendingSend.body,ai_result:JSON.stringify(pendingSend.result||{})})});popup('<div class="ai-check info"><h2>문의가 전달됐어요</h2><p>관리자 계정에서 AI 제안과 원문을 확인할 수 있어요. 보내기 여부는 그대로 선택할 수 있어요.</p><button onclick="closePopup()">확인</button></div>')}
 async function sendApproved(){if(!pendingSend)return;const next=pendingSend;pendingSend=null;closePopup();setAiStatus('');await api(`/api/rooms/${next.room}/messages`,{method:'POST',body:JSON.stringify({sender:'나',body:next.body})});openRoom(next.room)}
 function editPendingSend(){const body=pendingSend?.body||'';removePendingBubble();closePopup();const input=document.querySelector('#text');if(input){input.disabled=false;input.placeholder='메시지를 입력하세요';input.value=body;input.focus();queueAiCheck(body)}}
-async function removeMessage(id){if(!confirm('이 메시지를 삭제할까요?'))return;await api(`/api/rooms/${roomId}/messages/${id}`,{method:'DELETE'});openRoom(roomId)}
+async function removeMessage(id){
+  const feed = messageFeed;
+  if (!feedIsVisible(feed) || !confirm('이 메시지를 삭제할까요?')) return;
+  try {
+    await api(`/api/rooms/${feed.room}/messages/${id}`, {method:'DELETE'});
+    forgetMessage(feed, id);
+  } catch {
+    if (feedIsVisible(feed)) {
+      await refreshRoomMessages(feed);
+      if (roomMessages.some(message => message.id === id)) alert('메시지를 삭제하지 못했어요. 다시 시도해 주세요.');
+    }
+  }
+}
 function popup(inner){document.body.insertAdjacentHTML('beforeend',`<div class="modal" onclick="if(event.target===this)this.remove()"><section>${inner}</section></div>`)}function closePopup(){document.querySelector('.modal')?.remove()}function newRoom(){popup(`<h2>새 단체 채팅</h2><p>팀·친구와 함께할 대화 공간을 만들어요.</p><input id="roomName" placeholder="예: 과학 수행평가 조"><button onclick="saveRoom()">채팅방 만들기</button>`) }async function saveRoom(){const name=document.querySelector('#roomName').value.trim();if(!name)return;await api('/api/rooms',{method:'POST',body:JSON.stringify({name})});closePopup();home()}function newAgreement(){popup(`<h2>공동 확인 만들기</h2><p>할 일, 담당자, 기한을 함께 확인해요.</p><input id="task" placeholder="할 일"><input id="assignee" placeholder="담당자"><input id="deadline" placeholder="예: 내일 18:00"><button onclick="saveAgreement()">공동 확인 카드 만들기</button>`) }async function saveAgreement(){const task=document.querySelector('#task').value.trim();if(!task)return;await api('/api/agreements',{method:'POST',body:JSON.stringify({task,assignee:document.querySelector('#assignee').value,deadline:document.querySelector('#deadline').value})});closePopup();openRoom(roomId)}
-function popup(inner){document.body.insertAdjacentHTML('beforeend',`<div class="modal" onclick="if(event.target===this)this.remove()"><section>${inner}</section></div>`)}function closePopup(){document.querySelector('.modal')?.remove()}function newRoom(){popup(`<h2>새 단체 채팅</h2><p>팀·친구와 함께할 대화 공간을 만들어요.</p><input id="roomName" placeholder="예: 과학 수행평가 조"><button onclick="saveRoom()">채팅방 만들기</button>`) }async function saveRoom(){const name=document.querySelector('#roomName').value.trim();if(!name)return;await api('/api/rooms',{method:'POST',body:JSON.stringify({name})});closePopup();home()}function newAgreement(){popup(`<h2>공동 확인 만들기</h2><p>할 일, 담당자, 기한을 함께 확인해요.</p><input id="task" placeholder="할 일"><input id="assignee" placeholder="담당자"><input id="deadline" placeholder="예: 내일 18:00"><button onclick="saveAgreement()">공동 확인 카드 만들기</button>`) }async function saveAgreement(){const task=document.querySelector('#task').value.trim();if(!task)return;await api('/api/agreements',{method:'POST',body:JSON.stringify({task,assignee:document.querySelector('#assignee').value,deadline:document.querySelector('#deadline').value})});closePopup();openRoom(roomId)}function newAppointment(){popup(`<h2>함께할 약속 잡기</h2><p>회의·보이스톡·만남 일정을 팀에 바로 공유해요.</p><input id="appointmentTitle" placeholder="예: 발표 방향 짧은 회의"><input id="appointmentDate" type="datetime-local"><input id="appointmentPlace" placeholder="장소 또는 채팅방"><button onclick="saveAppointment()">약속 공유하기</button>`) }async function saveAppointment(){const title=document.querySelector('#appointmentTitle').value.trim(),date=document.querySelector('#appointmentDate').value;if(!title||!date)return;await api('/api/appointments',{method:'POST',body:JSON.stringify({title,date:date.replace('T',' '),place:document.querySelector('#appointmentPlace').value})});closePopup();home()}
+function popup(inner){document.body.insertAdjacentHTML('beforeend',`<div class="modal" onclick="if(event.target===this)this.remove()"><section>${inner}</section></div>`)}function closePopup(){document.querySelector('.modal')?.remove()}function newRoom(){popup(`<h2>새 단체 채팅</h2><p>팀·친구와 함께할 대화 공간을 만들어요.</p><input id="roomName" placeholder="예: 과학 수행평가 조"><button onclick="saveRoom()">채팅방 만들기</button>`) }async function saveRoom(){const name=document.querySelector('#roomName').value.trim();if(!name)return;await api('/api/rooms',{method:'POST',body:JSON.stringify({name})});closePopup();home()}function newAgreement(){popup(`<h2>공동 확인 만들기</h2><p>할 일, 담당자, 기한을 함께 확인해요.</p><input id="task" placeholder="할 일"><input id="assignee" placeholder="담당자"><input id="deadline" placeholder="예: 내일 18:00"><button onclick="saveAgreement()">공동 확인 카드 만들기</button>`) }async function saveAgreement(){const task=document.querySelector('#task').value.trim();if(!task)return;await api('/api/agreements',{method:'POST',body:JSON.stringify({task,assignee:document.querySelector('#assignee').value,deadline:document.querySelector('#deadline').value})});closePopup();openRoom(roomId)}
 function showAiPolicy(){popup(`<div class="ai-policy"><span>Re:Tone AI 안내 · 2026.11</span><h2>내 대화를 돕기 위한 AI 사용</h2><p><b>왜 개입하나요?</b><br>강한 욕설·위협 표현, 오해될 수 있는 말투, 출처 확인이 중요한 건강·안전·법·금융·재난·속보성 주장을 알리기 위해서예요.</p><p><b>무엇을 보내나요?</b><br>보내려는 메시지와 같은 채팅방의 최근 메시지 최대 6개(화자 포함)를 필요한 경우 OpenAI API로 보내 점검해요. 입력 중에는 입력한 문장만 미리 점검해요. 다른 채팅방 내용이나 계정의 전화번호·비밀번호·프로필은 별도로 보내지 않아요.</p><p><b>무엇을 하지 않나요?</b><br>사실을 거짓이라고 단정하거나, AI가 대신 전송하거나, 경고만으로 메시지를 막지 않아요. 최종 전송은 항상 내가 선택해요.</p><p><b>내가 조절할 수 있는 것</b><br>AI 끄기, 강한 표현만 확인, 균형 있게 확인, 꼼꼼한 확인을 설정에서 언제든 바꿀 수 있어요.</p><small>AI 점검 결과는 같은 문장을 빠르게 처리하기 위해 보관될 수 있으며, 설정에서 AI를 끄면 이후 점검을 멈춰요.</small><button onclick="closePopup()">확인했어요</button></div>`)}function start(){if(signedIn&&!signedInId){sessionStorage.removeItem('retone-v2-name');signedIn=''}if(signedIn)return home();app.innerHTML=`<main class="auth"><section class="auth-card"><div class="auth-brand">Re:<i>Tone</i></div><p class="auth-copy">말하기 전에 한 번,<br>이해한 뒤에 한 번.</p><div class="auth-tabs"><button class="selected" onclick="authForm('login')">로그인</button><button onclick="authForm('signup')">회원가입</button></div><div id="auth-form"></div><small>더 나은 대화와 함께하는 작업 공간</small></section></main>`;authForm('login')}function authForm(mode){const join=mode==='signup';document.querySelectorAll('.auth-tabs button').forEach((b,i)=>b.classList.toggle('selected',(i===1)===join));document.querySelector('#auth-form').innerHTML=`<label>이름<input id="auth-name" placeholder="이름을 입력하세요"></label><label>전화번호<input id="auth-phone" inputmode="numeric" placeholder="전화번호를 입력하세요"></label><label>비밀번호<input id="auth-password" type="password" placeholder="비밀번호를 입력하세요"></label>${join?'<label>AI 개입 정도<select id="auth-ai-level"><option value="light">가볍게 · 강한 욕설만</option><option value="standard" selected>균형 있게 · 말투와 중요한 정보</option><option value="careful">꼼꼼하게 · 더 세심한 확인</option><option value="off">AI 끄기</option></select></label><button type="button" class="ai-policy-link" onclick="showAiPolicy()">AI가 개입하는 이유와 사용 범위 보기</button><label class="consent"><input id="auth-ai-consent" type="checkbox"> AI 사용 안내를 읽었고, 선택한 범위의 점검에 동의해요.</label><p class="auth-hint">동의하지 않아도 AI 끄기를 선택해 가입할 수 있고, 설정에서 언제든 변경할 수 있어요.</p>':''}<button class="auth-submit" onclick="finishAuth('${mode}')">${join?'회원가입하고 시작하기':'로그인'}</button>${join?'<p class="auth-hint">같은 전화번호가 있으면 확인 절차가 안내돼요.</p>':''}`}async function finishAuth(mode){const name=document.querySelector('#auth-name').value.trim(),phone=document.querySelector('#auth-phone').value.replace(/\D/g,''),password=document.querySelector('#auth-password').value,ai=document.querySelector('#auth-ai-level')?.value,consent=document.querySelector('#auth-ai-consent')?.checked;if(!name||!phone||password.length<6)return alert('이름, 전화번호와 6자 이상 비밀번호를 입력해 주세요.');if(mode==='signup'&&ai!=='off'&&!consent)return alert('AI 사용 안내를 확인하고 동의하거나, AI 끄기를 선택해 주세요.');try{const user=await api('/api/auth/'+(mode==='signup'?'signup':'login'),{method:'POST',body:JSON.stringify({name,phone,password,ai_intervention:ai})});signedIn=user.name;signedInId=user.id;aiIntervention=user.ai_intervention||'standard';sessionStorage.setItem('retone-v2-name',user.name);sessionStorage.setItem('retone-v2-user-id',user.id);sessionStorage.setItem('retone-v2-ai-level',aiIntervention);sessionStorage.setItem('retone-v2-ai-consent',consent||aiIntervention==='off'?'yes':'');home()}catch{alert(mode==='signup'?'이미 가입된 전화번호이거나 입력값을 확인해 주세요.':'이름, 전화번호 또는 비밀번호를 다시 확인해 주세요.')}}
 function showAiPolicy(){popup(`<div class="ai-policy"><span>Re:Tone AI 안내 · 2026.11</span><h2>내 대화를 돕기 위한 AI 사용</h2><p><b>왜 개입하나요?</b><br>강한 욕설·위협 표현, 오해될 수 있는 말투, 출처 확인이 중요한 주장을 알리기 위해서예요.</p><p><b>무엇을 보내나요?</b><br>보내려는 메시지와 같은 채팅방의 최근 메시지 최대 6개(화자 포함)를 필요한 경우 OpenAI API로 보내 점검해요. 입력 중에는 입력한 문장만 미리 점검해요. 다른 채팅방 내용이나 계정의 전화번호·비밀번호·프로필은 별도로 보내지 않아요.</p><p><b>무엇을 하지 않나요?</b><br>AI가 대신 전송하거나 경고만으로 메시지를 막지 않아요. 최종 전송은 항상 내가 선택해요.</p><small>AI 점검 결과는 같은 문장을 빠르게 처리하기 위해 보관될 수 있어요.</small><button onclick="closePopup()">확인했어요</button></div>`)}
 function settings(){nav='settings';const avatar=localStorage.getItem('retone-avatar');app.innerHTML=`<main class="layout">${rail()}<section class="page"><header class="head"><h1>설정</h1></header><div class="content"><div class="intro"><h2>${esc(signedIn)}님</h2><p>프로필과 앱 사용 환경을 관리해요.</p></div><div class="rooms"><label class="room"><span class="avatar" id="avatarPreview">${avatar?`<img src="${avatar}">`:esc(signedIn[0])}</span><span class="copy"><b>프로필 사진 바꾸기</b><span>사진을 선택하면 이 기기에서 바로 적용돼요.</span></span><input hidden type="file" accept="image/*" onchange="setAvatar(this)"></label><section class="ai-preferences"><b>AI 대화 도움</b><p>강한 표현과 확인이 필요한 정보에 대해 제안을 보여줘요.</p><button class="ai-policy-link" onclick="showAiPolicy()">AI 사용 안내 보기</button></section><button class="room" onclick="logout()"><span class="avatar">↪</span><span class="copy"><b>로그아웃</b><span>이 기기에서 안전하게 로그아웃해요.</span></span></button></div></div></section></main>`}
@@ -57,7 +69,7 @@ function updateUnreadUi(){const total=chatUnreadTotal();document.querySelectorAl
 function appendNewMessages(messages){const list=document.querySelector('#messages');if(!list)return;const known=new Set([...list.querySelectorAll('[data-message-id]')].map(item=>item.dataset.messageId));const additions=messages.filter(message=>!known.has(message.id));if(!additions.length)return;const nearBottom=list.scrollHeight-list.scrollTop-list.clientHeight<72;list.insertAdjacentHTML('beforeend',additions.map(view).join(''));if(nearBottom)list.scrollTop=list.scrollHeight}
 async function refreshInbox(loadRooms=true){if(!signedIn||inboxSyncing)return;inboxSyncing=true;try{if(loadRooms||!data)data=await api('/api/bootstrap');const rooms=data?.rooms||[];const batches=await Promise.all(rooms.map(room=>api(`/api/rooms/${room.id}/messages`)));const seen=readSeenMessages();batches.forEach((messages,index)=>{const room=rooms[index];if(room.id===roomId){messages.filter(message=>!isMyMessage(message)).forEach(message=>seen.add(message.id));appendNewMessages(messages)}unreadCounts[room.id]=messages.filter(message=>!isMyMessage(message)&&!seen.has(message.id)).length});writeSeenMessages(seen);updateUnreadUi()}catch{}finally{inboxSyncing=false}}
 function startInboxPolling(){clearInterval(inboxPollTimer);if(signedIn){inboxPollTimer=setInterval(()=>refreshInbox(),2000)}}
-function stopInboxPolling(){clearInterval(inboxPollTimer);inboxPollTimer=null;unreadCounts={}}
+function stopInboxPolling(){clearInterval(inboxPollTimer);inboxPollTimer=null;unreadCounts={};stopMessageFeed()}
 function rail(){return `<aside class="rail"><div class="brand">Re:<i>Tone</i></div><nav><button class="${nav==='chat'?'active':''}" onclick="nav='chat';home()">채팅 <span class="nav-badge" data-chat-unread hidden></span></button><button class="${nav==='friends'?'active':''}" onclick="nav='friends';friends()">친구 <span class="nav-badge" data-friend-request-count hidden></span></button><button class="${nav==='settings'?'active':''}" onclick="settings()">설정</button></nav><small>${esc(signedIn||'Re:Tone')}</small></aside>`}
 function androidNav(){return `<nav class="android-nav"><button class="${nav==='chat'?'active':''}" onclick="nav='chat';home()"><span>▣</span>채팅 <i class="nav-badge" data-chat-unread hidden></i></button><button class="${nav==='friends'?'active':''}" onclick="nav='friends';friends()"><span>♙</span>친구 <i class="nav-badge" data-friend-request-count hidden></i></button><button class="${nav==='settings'?'active':''}" onclick="settings()"><span>⚙</span>설정</button></nav>`}
 function view(message){const mine=isMyMessage(message);return `<article class="bubble ${mine?'mine':''}" data-message-id="${esc(message.id)}" ${mine?'':`onclick="inspectMessage(${JSON.stringify(message.body)})"`}><div class="meta">${mine?'나':esc(message.sender)}</div>${esc(message.body)}${mine?`<button class="delete-message" title="메시지 삭제" onclick="removeMessage('${message.id}')">×</button>`:''}</article>`}
@@ -90,8 +102,6 @@ async function manageHiddenFriends(){const users=await api('/api/users');const h
 async function friends(){nav='friends';const users=await api('/api/users');const hidden=hiddenFriendIds();const list=users.filter(user=>user.id!==signedInId&&!hidden.has(user.id));const hiddenCount=hidden.size;app.innerHTML=`<main class="layout android-layout">${rail()}<section class="page"><header class="head"><h1>친구</h1><button class="new-room" onclick="newRoom()">＋ 단톡방</button></header><div class="content"><div class="intro"><h2>Re:Tone 친구</h2><p>여러 명을 선택해 단체 채팅방을 만들 수 있어요.</p>${hiddenCount?`<button class="hidden-manage" onclick="manageHiddenFriends()">숨긴 친구 ${hiddenCount}명 관리</button>`:''}</div><div class="rooms">${list.length?list.map(user=>`<div class="friend-row"><button class="room" onclick="startDirect('${esc(user.name)}','${user.id}')"><span class="avatar">${esc(user.name[0])}</span><span class="copy"><b>${esc(user.name)}</b><span>눌러서 1:1 대화 시작</span></span><span>›</span></button><button class="hide-friend" onclick="hideFriend('${user.id}')">숨기기</button></div>`).join(''):`<div class="empty-chat"><b>표시할 친구가 없어요</b><span>친구가 가입하거나 숨긴 친구를 다시 보이게 해주세요.</span></div>`}</div></div></section>${androidNav()}</main>`}
 async function startDirect(name,userId){const directKey=[signedInId,userId].sort().join(':');const room=await api('/api/rooms',{method:'POST',body:JSON.stringify({name,members:[name],direct_key:directKey})});data=await api('/api/bootstrap');openRoom(room.id)}
 async function saveAgreement(){const task=document.querySelector('#task')?.value.trim();if(!task)return alert('할 일을 입력해 주세요.');await api('/api/agreements',{method:'POST',body:JSON.stringify({task,assignee:document.querySelector('#assignee')?.value||'',deadline:document.querySelector('#deadline')?.value||''})});data=await api('/api/bootstrap');closePopup();await openRoom(roomId)}
-async function saveAppointment(){const title=document.querySelector('#appointmentTitle')?.value.trim(),date=document.querySelector('#appointmentDate')?.value;if(!title||!date)return alert('일정 이름과 시간을 입력해 주세요.');await api('/api/appointments',{method:'POST',body:JSON.stringify({title,date:date.replace('T',' '),place:document.querySelector('#appointmentPlace')?.value||''})});data=await api('/api/bootstrap');closePopup();await home()}
-function scheduleCards(){const appointments=(data?.appointments||[]).slice(-3).reverse();return `<section class="focus schedule"><b>다음 일정 <button onclick="newAppointment()">＋</button></b>${appointments.length?appointments.map(item=>`<div class="schedule-item"><strong>${esc(item.title)}</strong><span>${esc(item.date)} · ${esc(item.place)}</span></div>`).join(''):'<span>아직 잡힌 일정이 없어요.</span>'}</section>`}
 async function home(){nav='chat';roomId=null;data=await api('/api/bootstrap');await refreshInbox(false);const rooms=data.rooms;app.innerHTML=`<main class="layout android-layout">${rail()}<section class="page"><header class="head"><div><small class="mobile-kicker">Re:Tone</small><h1>채팅</h1></div><button class="new-room" onclick="newRoom()">＋ 단톡방</button></header><div class="content"><div class="intro"><h2>${esc(signedIn)}님, 안녕하세요</h2><p>친구를 골라 대화방을 만들고 초대해 보세요.</p></div><div class="dash">${scheduleCards()}</div><div class="rooms">${rooms.length?rooms.map(room=>`<button class="room" data-room-id="${esc(room.id)}" onclick="openRoom('${room.id}')"><span class="avatar">${esc(room.name[0])}</span><span class="copy"><b>${esc(room.name)}</b><span>참여자 ${room.members}명 · ${esc(room.last)}</span></span><span class="badge" data-room-unread hidden></span></button>`).join(''):`<button class="empty-chat" onclick="newRoom()"><b>친구와 첫 대화를 시작해요</b><span>친구를 선택해 단체 채팅방을 만들 수 있어요. ＋</span></button>`}</div></div></section>${androidNav()}</main>`;updateUnreadUi();startInboxPolling()}
 let roomMessages=[];
 function messageContext(){return roomMessages.slice(-6).map(message=>`${message.sender}: ${message.body}`)}
@@ -99,96 +109,153 @@ async function runAiCheck(text){if(aiPrefetch.text!==text)return;setAiStatus('AI
 async function rewritePending(){if(!pendingSend)return;const button=document.querySelector('.modal-actions .quiet');if(button){button.disabled=true;button.textContent='표현을 다듬는 중…'}try{const out=await api('/api/ai/rewrite',{method:'POST',body:JSON.stringify({text:pendingSend.body,context:messageContext()})});if(out.suggestion){pendingSend.body=out.suggestion;skipRewrittenAiCheck=true;editPendingSend();return}if(button){button.disabled=false;button.textContent='표현 바꾸기'}alert(out.error==='OPENAI_API_KEY_MISSING'?'AI 표현 바꾸기를 사용하려면 Render 환경 변수 OPENAI_API_KEY를 설정해 주세요.':'표현을 바꾸지 못했어요. 잠시 후 다시 시도해 주세요.')}catch{if(button){button.disabled=false;button.textContent='표현 바꾸기'}alert('표현을 바꾸지 못했어요. 네트워크 연결을 확인해 주세요.')}}
 function view(message){const mine=isMyMessage(message);return `<article class="bubble ${mine?'mine':''}" data-message-id="${esc(message.id)}" ${mine?'':`onclick="inspectMessage(${JSON.stringify(message.body)})"`}><div class="meta">${mine?'나':esc(message.sender)}</div>${esc(message.body)}${mine&&message.unread?`<span class="read">${message.unread}</span>`:''}${mine?`<button class="delete-message" title="메시지 삭제" onclick="removeMessage('${message.id}')">×</button>`:''}</article>`}
 function updateReadReceipts(messages){const list=document.querySelector('#messages');if(!list)return;messages.filter(isMyMessage).forEach(message=>{const bubble=list.querySelector(`[data-message-id="${message.id}"]`);if(!bubble)return;const receipt=bubble.querySelector('.read');if(message.unread){if(receipt)receipt.textContent=message.unread;else bubble.insertAdjacentHTML('beforeend',`<span class="read">${message.unread}</span>`)}else receipt?.remove()})}
-function appendNewMessages(messages){const list=document.querySelector('#messages');if(!list)return;const known=new Set([...list.querySelectorAll('[data-message-id]')].map(item=>item.dataset.messageId));const additions=messages.filter(message=>!known.has(message.id));if(!additions.length)return;roomMessages.push(...additions);const nearBottom=list.scrollHeight-list.scrollTop-list.clientHeight<72;list.insertAdjacentHTML('beforeend',additions.map(view).join(''));if(nearBottom)list.scrollTop=list.scrollHeight}
+let messageFeed = null, messageRequest = 0;
+
+function stopMessageFeed() {
+  messageFeed?.events?.close();
+  messageFeed = null;
+  roomMessages = [];
+}
+
+function feedIsCurrent(feed) {
+  return Boolean(feed && feed === messageFeed && roomId === feed.room && signedInId === feed.user && nav === 'chat');
+}
+
+function feedIsVisible(feed) {
+  return feedIsCurrent(feed) && Boolean(feed.list && document.querySelector('.chat #messages') === feed.list);
+}
+
+function forgetMessage(feed, id) {
+  if (!feedIsVisible(feed)) return;
+  feed.deleted.add(id);
+  feed.applied = ++messageRequest;
+  feed.list.querySelector(`[data-message-id="${id}"]`)?.remove();
+  roomMessages = roomMessages.filter(message => message.id !== id);
+}
+
+function displaySentMessage(message) {
+  const feed = messageFeed;
+  if (!feedIsVisible(feed) || message.room_id !== feed.room || feed.deleted.has(message.id)) return null;
+  feed.applied = ++messageRequest;
+  const selector = `[data-message-id="${message.id}"]`;
+  if (!feed.list.querySelector(selector)) {
+    feed.list.insertAdjacentHTML('beforeend', view(message));
+    roomMessages.push(message);
+  }
+  feed.list.scrollTop = feed.list.scrollHeight;
+  return feed.list.querySelector(selector);
+}
+
+function reconcileRoomMessages(feed, request, messages) {
+  if (!feedIsVisible(feed) || request <= feed.applied) return false;
+  feed.applied = request;
+  roomMessages = messages.filter(message => !feed.deleted.has(message.id));
+  const ids = new Set(roomMessages.map(message => message.id));
+  const known = new Set();
+  const list = feed.list;
+  const nearBottom = list.scrollHeight - list.scrollTop - list.clientHeight < 72;
+  for (const bubble of list.querySelectorAll('[data-message-id]')) {
+    const id = bubble.dataset.messageId;
+    if (ids.has(id)) known.add(id);
+    else bubble.remove();
+  }
+  // Insert any missed older messages before their surviving successors as well.
+  let next = null;
+  for (let index = roomMessages.length - 1; index >= 0; index--) {
+    const message = roomMessages[index];
+    if (!known.has(message.id)) {
+      if (next) next.insertAdjacentHTML('beforebegin', view(message));
+      else list.insertAdjacentHTML('beforeend', view(message));
+    }
+    next = list.querySelector(`[data-message-id="${message.id}"]`);
+  }
+  if (nearBottom) list.scrollTop = list.scrollHeight;
+  updateReadReceipts(roomMessages);
+  return true;
+}
+
+async function refreshRoomMessages(feed) {
+  if (!feedIsVisible(feed)) return;
+  const request = ++messageRequest;
+  try {
+    const messages = await api(`/api/rooms/${feed.room}/messages`);
+    reconcileRoomMessages(feed, request, messages);
+  } catch { /* The regular inbox refresh will retry. */ }
+}
+
+function watchRoomMessages(feed) {
+  if (typeof EventSource === 'undefined') return;
+  const events = new EventSource(`/api/rooms/${feed.room}/message-events?user_id=${encodeURIComponent(feed.user)}`);
+  feed.events = events;
+  events.addEventListener('deleted', event => forgetMessage(feed, event.data));
+  events.addEventListener('resync', () => refreshRoomMessages(feed));
+  events.onopen = () => refreshRoomMessages(feed);
+}
 async function refreshInbox(loadRooms=true){if(!signedIn||inboxSyncing)return;inboxSyncing=true;try{if(loadRooms||!data)data=await api('/api/bootstrap');const rooms=data?.rooms||[];const batches=await Promise.all(rooms.map(room=>api(`/api/rooms/${room.id}/messages`)));const reads=[];const seen=readSeenMessages();batches.forEach((messages,index)=>{const room=rooms[index];if(room.id===roomId){const incoming=messages.filter(message=>!isMyMessage(message));incoming.forEach(message=>seen.add(message.id));if(incoming.some(message=>message.unread>0))reads.push(api(`/api/rooms/${room.id}/read`,{method:'POST',body:JSON.stringify({reader:signedIn})}));appendNewMessages(messages);updateReadReceipts(messages)}unreadCounts[room.id]=messages.filter(message=>!isMyMessage(message)&&!seen.has(message.id)).length});await Promise.all(reads);writeSeenMessages(seen);updateUnreadUi();updateScheduleUi()}catch{}finally{inboxSyncing=false}}
 async function openRoom(id){roomId=id;if(!data)data=await api('/api/bootstrap');const room=data.rooms.find(item=>item.id===id);if(!room)return home();const messages=await api(`/api/rooms/${id}/messages`);roomMessages=messages.slice();await api(`/api/rooms/${id}/read`,{method:'POST',body:JSON.stringify({reader:signedIn})});markMessagesRead(messages);unreadCounts[id]=0;const names=['나',...(room.participant_names||[])].join(', ');app.innerHTML=`<main class="layout android-layout">${rail()}<section class="chat"><header class="head chat-head"><button class="back" onclick="home()">‹</button><div class="room-title"><h1>${esc(room.name)}</h1><span>${esc(names)} · ${room.members}명</span></div><div class="chat-actions"><button onclick="inviteFriends()">＋ 초대</button><button onclick="newAgreement()">✓</button></div></header><section class="messages" id="messages">${messages.map(view).join('')}${data.agreements.slice(0,1).map(agreement=>`<article class="agreement"><b>✓ 공동 확인 · ${esc(agreement.task)}</b><small>담당 ${esc(agreement.assignee)} · ${esc(agreement.deadline)}</small></article>`).join('')}</section><form class="sendbar" onsubmit="send(event)"><input id="text" placeholder="메시지를 입력하세요" autocomplete="off" oninput="queueAiCheck(this.value)"><span id="ai-status" class="ai-status"></span><button aria-label="보내기">↑</button></form></section></main>`;const list=document.querySelector('#messages');list.scrollTop=list.scrollHeight;document.querySelector('#text')?.focus();updateUnreadUi();startInboxPolling()}
-const seenAppointmentsKey=()=>`retone-v2-seen-appointments-v1-${signedInId||'guest'}`;
-const hideSchedulesKey=()=>`retone-v2-hide-schedules-v1-${signedInId||'guest'}`;
-function seenAppointmentIds(){try{return new Set(JSON.parse(localStorage.getItem(seenAppointmentsKey())||'[]'))}catch{return new Set()}}
-function unseenAppointments(){const seen=seenAppointmentIds();return (data?.appointments||[]).filter(item=>item.creator&&item.creator!==signedIn&&!seen.has(item.id))}
-function appointmentItems(){const appointments=(data?.appointments||[]).slice(-3).reverse();return appointments.length?appointments.map(item=>`<div class="schedule-item"><strong>${esc(item.title)}</strong><span>${esc(item.date)} · ${esc(item.place)}</span></div>`).join(''):'<span>아직 잡힌 일정이 없어요.</span>'}
-function markSchedulesRead(){const seen=seenAppointmentIds();unseenAppointments().forEach(item=>seen.add(item.id));localStorage.setItem(seenAppointmentsKey(),JSON.stringify([...seen]));updateScheduleUi()}
-function toggleSchedules(){localStorage.setItem(hideSchedulesKey(),localStorage.getItem(hideSchedulesKey())==='1'?'':'1');home()}
-function scheduleCards(){if(!visibleAppointments().length)return '';const hidden=localStorage.getItem(hideSchedulesKey())==='1';const count=unseenAppointments().length;return `<section class="focus schedule"><b>다음 일정 <span class="schedule-badge" data-schedule-unread ${count?'':'hidden'}>+${count}</span><button onclick="newAppointment()">＋</button><button class="schedule-toggle" onclick="toggleSchedules()">${hidden?'보기':'숨기기'}</button></b>${hidden?'<span>이 기기에서는 일정을 숨겼어요.</span>':`<div data-schedule-items>${appointmentItems()}</div>`}<button class="schedule-check" onclick="markSchedulesRead()">일정 확인</button></section>`}
-function updateScheduleUi(){const count=unseenAppointments().length;document.querySelectorAll('[data-schedule-unread]').forEach(badge=>{badge.hidden=count===0;badge.textContent=`+${count}`});const items=document.querySelector('[data-schedule-items]');if(items)items.innerHTML=appointmentItems()}
-async function saveAppointment(){const title=document.querySelector('#appointmentTitle')?.value.trim(),date=document.querySelector('#appointmentDate')?.value;if(!title||!date)return alert('일정 이름과 시간을 입력해 주세요.');await api('/api/appointments',{method:'POST',body:JSON.stringify({title,date:date.replace('T',' '),place:document.querySelector('#appointmentPlace')?.value||'',creator:signedIn})});data=await api('/api/bootstrap');closePopup();await home()}
-let scheduleDraftFields=[];
-function scheduleFieldEditor(){return scheduleDraftFields.map((field,index)=>`<div class="schedule-field-edit"><input value="${esc(field.label)}" aria-label="항목 이름" oninput="scheduleDraftFields[${index}].label=this.value"><input value="${esc(field.value)}" aria-label="항목 내용" oninput="scheduleDraftFields[${index}].value=this.value"><button type="button" onclick="scheduleDraftFields.splice(${index},1);refreshScheduleFieldEditor()">×</button></div>`).join('')}
-function refreshScheduleFieldEditor(){const editor=document.querySelector('#schedule-field-editor');if(editor)editor.innerHTML=scheduleFieldEditor()}
-function addScheduleField(){scheduleDraftFields.push({label:'세부사항',value:''});refreshScheduleFieldEditor()}
-function scheduleForm(title='',saveAction='saveAppointment()'){return `<div class="group-modal"><h2>일정 카드</h2><input id="appointmentTitle" value="${esc(title)}" placeholder="일정 제목"><div id="schedule-field-editor">${scheduleFieldEditor()}</div><button type="button" class="add-schedule-field" onclick="addScheduleField()">＋ 항목 추가</button><button onclick="${saveAction}">저장하기</button></div>`}
-function newAppointment(){scheduleDraftFields=[{label:'누구',value:signedIn||'미정'},{label:'언제',value:'미정'},{label:'어디',value:'미정'}];popup(scheduleForm())}
-async function saveAppointment(){const title=document.querySelector('#appointmentTitle')?.value.trim();if(!title)return alert('일정 제목을 입력해 주세요.');await api('/api/appointments',{method:'POST',body:JSON.stringify({title,fields:scheduleDraftFields,creator:signedIn})});data=await api('/api/bootstrap');closePopup();await home()}
-function editAppointment(id){const appointment=(data?.appointments||[]).find(item=>item.id===id);if(!appointment)return;scheduleDraftFields=(appointment.fields||[]).map(field=>({label:field.label,value:field.value}));popup(scheduleForm(appointment.title,`saveAppointmentEdit('${id}')`))}
-async function saveAppointmentEdit(id){const title=document.querySelector('#appointmentTitle')?.value.trim();if(!title)return alert('일정 제목을 입력해 주세요.');await api(`/api/appointments/${id}`,{method:'PATCH',body:JSON.stringify({title,fields:scheduleDraftFields})});data=await api('/api/bootstrap');closePopup();await home()}
-async function cancelAppointment(id){if(!confirm('이 일정을 취소할까요?'))return;await api(`/api/appointments/${id}`,{method:'DELETE'});data=await api('/api/bootstrap');await home()}
-function appointmentItems(){const appointments=(data?.appointments||[]).slice(-3).reverse();return appointments.length?appointments.map(item=>`<article class="schedule-item"><button class="schedule-cancel" title="일정 취소" onclick="cancelAppointment('${item.id}')">×</button><button class="schedule-edit" onclick="editAppointment('${item.id}')"><strong>${esc(item.title)}</strong>${(item.fields||[]).map(field=>`<span><b>${esc(field.label)}</b>${esc(field.value)}</span>`).join('')}</button></article>`).join(''):'<span>아직 잡힌 일정이 없어요.</span>'}
-async function maybeScheduleFromMessage(message,context){try{const proposal=await api('/api/ai/schedule',{method:'POST',body:JSON.stringify({text:message.body,sender:message.sender,context})});if(!proposal.is_schedule)return;const appointment=await api('/api/appointments',{method:'POST',body:JSON.stringify({title:proposal.title,fields:proposal.fields,creator:message.sender,source_message_id:message.id})});data=await api('/api/bootstrap');const list=document.querySelector('#messages');if(list)list.insertAdjacentHTML('beforeend',`<article class="agreement auto-schedule"><b>📅 일정 카드가 만들어졌어요 · ${esc(appointment.title)}</b><small>홈 화면에서 항목을 수정하거나 ×로 취소할 수 있어요.</small></article>`)}catch{}}
-async function sendChatMessage(room,body){const message=await api(`/api/rooms/${room}/messages`,{method:'POST',body:JSON.stringify({sender:signedIn,body})});const context=[...roomMessages, message].slice(-6).map(item=>`${item.sender}: ${item.body}`);await openRoom(room);maybeScheduleFromMessage(message,context)}
-async function sendApproved(){if(!pendingSend)return;const next=pendingSend;pendingSend=null;closePopup();setAiStatus('');await sendChatMessage(next.room,next.body);document.querySelector('#text')?.focus()}
-async function send(event){event.preventDefault();if(pendingSend)return;const input=document.querySelector('#text'),body=input?.value.trim();if(!body)return;if(skipRewrittenAiCheck){skipRewrittenAiCheck=false;input.value='';input.disabled=true;await sendChatMessage(roomId,body);return}pendingSend={body,room:roomId};input.value='';input.disabled=true;const saved=aiIntervention!=='off'&&savedAiResult(body);input.placeholder=aiIntervention==='off'?'메시지를 보내고 있어요…':saved?'이전 확인 결과를 사용해요…':'AI가 확인 중이에요…';addPendingBubble(body);try{showCheckResult(await checkForSend(body))}catch{await sendApproved()}}
-const hiddenAppointmentKey=()=>`retone-v2-hidden-appointments-v1-${signedInId||'guest'}`;
-function hiddenAppointmentIds(){try{return new Set(JSON.parse(localStorage.getItem(hiddenAppointmentKey())||'[]'))}catch{return new Set()}}
-function visibleAppointments(){const hidden=hiddenAppointmentIds();return (data?.appointments||[]).filter(item=>!hidden.has(item.id))}
-function hideScheduleCard(id){const hidden=hiddenAppointmentIds();hidden.add(id);localStorage.setItem(hiddenAppointmentKey(),JSON.stringify([...hidden]));document.querySelectorAll(`[data-schedule-id="${id}"]`).forEach(card=>card.remove());const items=document.querySelector('[data-schedule-items]');if(items)items.innerHTML=appointmentItems()}
-function scheduleCard(appointment,chat=false){return `<article class="schedule-item ${chat?'chat-schedule-card':''}" data-schedule-id="${appointment.id}"><button class="schedule-cancel" title="내 화면에서 숨기기" onclick="hideScheduleCard('${appointment.id}')">×</button><button class="schedule-edit" onclick="editAppointment('${appointment.id}')"><strong>${esc(appointment.title||'일정')}</strong>${(appointment.fields||[]).map(field=>`<span><b>${esc(field.label)}</b>${esc(field.value)||' '}</span>`).join('')}</button></article>`}
-function appointmentItems(){const appointments=visibleAppointments().slice(-3).reverse();return appointments.length?appointments.map(item=>scheduleCard(item)).join(''):'<span>아직 잡힌 일정이 없어요.</span>'}
-function chatScheduleCards(room){const appointments=visibleAppointments().filter(item=>item.room_id===room);return appointments.length?`<section class="room-schedules"><b>📅 일정 카드</b>${appointments.map(item=>scheduleCard(item,true)).join('')}</section>`:''}
-function newAppointment(){scheduleDraftFields=[{label:'할일',value:''},{label:'누구',value:''},{label:'언제',value:''},{label:'어디',value:''}];popup(scheduleForm('일정'))}
-async function saveAppointment(){const title=document.querySelector('#appointmentTitle')?.value.trim();if(!title)return alert('일정 제목을 입력해 주세요.');await api('/api/appointments',{method:'POST',body:JSON.stringify({title,fields:scheduleDraftFields,creator:signedIn})});data=await api('/api/bootstrap');closePopup();await home()}
-async function openRoom(id){roomId=id;if(!data)data=await api('/api/bootstrap');const room=data.rooms.find(item=>item.id===id);if(!room)return home();const messages=await api(`/api/rooms/${id}/messages`);roomMessages=messages.slice();await api(`/api/rooms/${id}/read`,{method:'POST',body:JSON.stringify({reader:signedIn})});markMessagesRead(messages);unreadCounts[id]=0;const names=['나',...(room.participant_names||[])].join(', ');app.innerHTML=`<main class="layout android-layout">${rail()}<section class="chat"><header class="head chat-head"><button class="back" onclick="home()">‹</button><div class="room-title"><h1>${esc(room.name)}</h1><span>${esc(names)} · ${room.members}명</span></div><div class="chat-actions"><button onclick="inviteFriends()">＋ 초대</button><button onclick="newAgreement()">✓</button></div></header><section class="messages" id="messages">${messages.map(view).join('')}${chatScheduleCards(id)}${data.agreements.slice(0,1).map(agreement=>`<article class="agreement"><b>✓ 공동 확인 · ${esc(agreement.task)}</b><small>담당 ${esc(agreement.assignee)} · ${esc(agreement.deadline)}</small></article>`).join('')}</section><form class="sendbar" onsubmit="send(event)"><input id="text" placeholder="메시지를 입력하세요" autocomplete="off" oninput="queueAiCheck(this.value)"><span id="ai-status" class="ai-status"></span><button aria-label="보내기">↑</button></form></section></main>`;const list=document.querySelector('#messages');list.scrollTop=list.scrollHeight;document.querySelector('#text')?.focus();updateUnreadUi();startInboxPolling()}
-let schedulePrefetch={text:'',result:null,promise:null,timer:null},pendingScheduleProposal=null;
-function scheduleReplyOnly(text){return ["응","응좋아","그래좋아","좋아","좋아요","그래","알겠어","넵","네","ㅇㅋ","ㅇㅇ","ok","okay","오케이","콜","좋지","가능해","맞아","응좋아내일보자","좋아내일보자","그래내일보자","응내일보자","그럼좋아","그럼내일보자"].includes(String(text||'').toLowerCase().replace(/[\s\p{P}\p{S}]/gu,''))}
-function scheduleCandidate(text){return !scheduleReplyOnly(text)&&/(일정|약속|회의|만나|놀자|가자|갈래|보자|까지|해\s*줘|만들어|준비|피피티|ppt|발표|과제|숙제|제출)/i.test(text)}
-function shouldAskScheduleAi(text){return Boolean(String(text||'').trim())&&!scheduleReplyOnly(text)}
-function handleChatInput(value){if(rewrittenApprovedText&&value.trim()!==rewrittenApprovedText)rewrittenApprovedText='';queueAiCheck(value);queueScheduleCheck(value)}
-function queueScheduleCheck(value){const text=value.trim();clearTimeout(schedulePrefetch.timer);if(!text||!scheduleCandidate(text)){schedulePrefetch={text:'',result:null,promise:null,timer:null};return}if(schedulePrefetch.text===text&&(schedulePrefetch.result||schedulePrefetch.promise))return;schedulePrefetch={text,result:null,promise:null,timer:setTimeout(()=>runSchedulePrefetch(text),450)}}
-async function runSchedulePrefetch(text){if(schedulePrefetch.text!==text)return null;const request=api('/api/ai/schedule',{method:'POST',body:JSON.stringify({text,sender:signedIn,context:messageContext()})});schedulePrefetch.promise=request;try{const result=await request;if(schedulePrefetch.text===text){schedulePrefetch.result=result;schedulePrefetch.promise=null}return result}catch{if(schedulePrefetch.text===text)schedulePrefetch.promise=null;return null}}
-function roomAppointments(room){return visibleAppointments().filter(item=>item.room_id===room).slice().reverse()}
-function scheduleNoticeFields(appointment){return (appointment.fields||[]).filter(field=>field.value).slice(0,2).map(field=>`${esc(field.label)} ${esc(field.value)}`).join(' · ')}
-function roomScheduleNotice(room){const appointments=roomAppointments(room);if(!appointments.length)return '';const latest=appointments[0],summary=scheduleNoticeFields(latest);return `<aside class="room-notice" data-schedule-signature="${esc(appointments.map(item=>item.id).join('|'))}"><span class="notice-pin">📌</span><button class="notice-main" onclick="editAppointment('${latest.id}')"><b>${esc(latest.title||'일정')}</b><small>${summary||'일정 내용을 확인해 주세요.'}</small></button><button class="notice-view" onclick="showRoomSchedules('${room}')">보기${appointments.length>1?` ${appointments.length}`:''}</button><button class="notice-close" title="내 화면에서 숨기기" onclick="hideScheduleCard('${latest.id}')">×</button></aside>`}
-function showRoomSchedules(room){const appointments=roomAppointments(room);popup(`<div class="group-modal schedule-list"><h2>이 채팅방 일정</h2><p>일정을 누르면 내용을 수정할 수 있어요.</p>${appointments.length?appointments.map(item=>`<button class="schedule-list-row" onclick="closePopup();editAppointment('${item.id}')"><strong>${esc(item.title||'일정')}</strong><span>${scheduleNoticeFields(item)||'입력된 세부사항이 없어요.'}</span></button>`).join(''):'<p>표시할 일정이 없어요.</p>'}<button class="quiet schedule-list-close" onclick="closePopup()">닫기</button></div>`)}
-function renderRoomScheduleNotice(){const host=document.querySelector('#room-schedule-notice');if(host&&roomId)host.innerHTML=roomScheduleNotice(roomId)}
-function updateChatScheduleUi(){renderRoomScheduleNotice()}
-function hideScheduleCard(id){const hidden=hiddenAppointmentIds();hidden.add(id);localStorage.setItem(hiddenAppointmentKey(),JSON.stringify([...hidden]));document.querySelectorAll(`[data-schedule-id="${id}"]`).forEach(card=>card.remove());const items=document.querySelector('[data-schedule-items]');if(items)items.innerHTML=appointmentItems();renderRoomScheduleNotice()}
-function scheduleProposalMarkup(proposal){return `<div class="schedule-proposal"><span>📅 일정으로 보이는 메시지예요</span><h2>${esc(proposal.title||'일정 카드')}</h2>${(proposal.fields||[]).map(field=>`<p><b>${esc(field.label)}</b><em>${esc(field.value)||'비어 있음'}</em></p>`).join('')}<small>이 일정 카드를 채팅방에 표시할까요?</small><div class="modal-actions"><button class="quiet" onclick="dismissScheduleProposal()">사용 안 함</button><button onclick="acceptScheduleProposal()">일정 카드 쓰기</button></div></div>`}
-function showScheduleProposal(message,proposal){pendingScheduleProposal={message,proposal};popup(scheduleProposalMarkup(proposal))}
-function dismissScheduleProposal(){pendingScheduleProposal=null;closePopup();document.querySelector('#text')?.focus()}
-async function acceptScheduleProposal(){if(!pendingScheduleProposal)return;const {message,proposal}=pendingScheduleProposal;pendingScheduleProposal=null;const button=document.querySelector('.schedule-proposal .modal-actions button:last-child');if(button){button.disabled=true;button.textContent='만드는 중…'}try{await api('/api/appointments',{method:'POST',body:JSON.stringify({title:proposal.title,fields:proposal.fields,creator:message.sender,source_message_id:message.id,room_id:message.room_id})});data=await api('/api/bootstrap');closePopup();renderRoomScheduleNotice();updateScheduleUi();document.querySelector('#text')?.focus()}catch{if(button){button.disabled=false;button.textContent='일정 카드 쓰기'}alert('일정 카드를 만들지 못했어요. 다시 시도해 주세요.')}}
-
-async function maybeScheduleFromMessage(message,context){
-  try{
-    // Only the sender sees the optional schedule card. Recipients merely see
-    // the appointment after the sender accepts it.
-    if(message.sender!==signedIn||!shouldAskScheduleAi(message.body))return;
-    const prompted=schedulePromptedMessages();
-    if(message.id&&prompted.has(message.id))return;
-    if(message.id){prompted.add(message.id);saveSchedulePromptedMessages(prompted);}
-    const previous=context.slice(0,-1);
-    let proposal=null;
-    if(schedulePrefetch.text===message.body){
-      if(schedulePrefetch.timer){clearTimeout(schedulePrefetch.timer);schedulePrefetch.timer=null;proposal=await runSchedulePrefetch(message.body);}
-      else proposal=schedulePrefetch.result||(schedulePrefetch.promise?await schedulePrefetch.promise:null);
-    }
-    if(!proposal)proposal=await api('/api/ai/schedule',{method:'POST',body:JSON.stringify({text:message.body,sender:message.sender,context:previous})});
-    schedulePrefetch={text:'',result:null,promise:null,timer:null};
-    if(roomId!==message.room_id)return;
-    if(proposal?.is_schedule)showScheduleProposal(message,proposal);
-    else if(proposal?.error)setAiStatus('일정 자동 확인을 완료하지 못했어요. ＋에서 직접 추가할 수 있어요.');
-  }catch{if(roomId===message.room_id)setAiStatus('일정 확인에 실패했어요. ＋에서 직접 추가할 수 있어요.');}
+async function sendApproved(){
+  const next=pendingSend;
+  if(!next)return;
+  pendingSend=null;
+  if(!isCurrentSendView(next))return;
+  if(document.querySelector('.modal .ai-check'))closePopup();
+  setAiStatus('');
+  await sendChatMessage(next.room,next.body);
 }
-function schedulePromptedMessages(){try{return new Set(JSON.parse(sessionStorage.getItem(`retone-schedule-prompts-${signedInId}`)||'[]'))}catch{return new Set()}}
-function saveSchedulePromptedMessages(ids){try{sessionStorage.setItem(`retone-schedule-prompts-${signedInId}`,JSON.stringify([...ids].slice(-200)))}catch{}}
-async function maybeScheduleFromIncoming(){ /* recipients never receive a schedule proposal */ }
+async function send(event){event.preventDefault();if(pendingSend)return;const input=document.querySelector('#text'),body=input?.value.trim();if(!body)return;if(skipRewrittenAiCheck){skipRewrittenAiCheck=false;input.value='';input.disabled=true;await sendChatMessage(roomId,body);return}pendingSend={body,room:roomId};input.value='';input.disabled=true;const saved=aiIntervention!=='off'&&savedAiResult(body);input.placeholder=aiIntervention==='off'?'메시지를 보내고 있어요…':saved?'이전 확인 결과를 사용해요…':'AI가 확인 중이에요…';addPendingBubble(body);try{showCheckResult(await checkForSend(body))}catch{await sendApproved()}}
+async function openRoom(id){roomId=id;if(!data)data=await api('/api/bootstrap');const room=data.rooms.find(item=>item.id===id);if(!room)return home();const messages=await api(`/api/rooms/${id}/messages`);roomMessages=messages.slice();await api(`/api/rooms/${id}/read`,{method:'POST',body:JSON.stringify({reader:signedIn})});markMessagesRead(messages);unreadCounts[id]=0;const names=['나',...(room.participant_names||[])].join(', ');app.innerHTML=`<main class="layout android-layout">${rail()}<section class="chat"><header class="head chat-head"><button class="back" onclick="home()">‹</button><div class="room-title"><h1>${esc(room.name)}</h1><span>${esc(names)} · ${room.members}명</span></div><div class="chat-actions"><button onclick="inviteFriends()">＋ 초대</button><button onclick="newAgreement()">✓</button></div></header><section class="messages" id="messages">${messages.map(view).join('')}${chatScheduleCards(id)}${data.agreements.slice(0,1).map(agreement=>`<article class="agreement"><b>✓ 공동 확인 · ${esc(agreement.task)}</b><small>담당 ${esc(agreement.assignee)} · ${esc(agreement.deadline)}</small></article>`).join('')}</section><form class="sendbar" onsubmit="send(event)"><input id="text" placeholder="메시지를 입력하세요" autocomplete="off" oninput="queueAiCheck(this.value)"><span id="ai-status" class="ai-status"></span><button aria-label="보내기">↑</button></form></section></main>`;const list=document.querySelector('#messages');list.scrollTop=list.scrollHeight;document.querySelector('#text')?.focus();updateUnreadUi();startInboxPolling()}
+function handleChatInput(value){
+  if(rewrittenApprovedText && value.trim()!==rewrittenApprovedText)rewrittenApprovedText='';
+  queueAiCheck(value);
+}
+
+function isCurrentSendView(view){
+  return nav==='chat' && view.userId===signedInId && view.room===roomId &&
+    view.list && view.list===document.querySelector('.chat #messages');
+}
+
+function offerScheduleOnMessage(view,message,proposal){
+  if(!proposal?.is_schedule || !isCurrentSendView(view) || message.sender!==signedIn || message.room_id!==roomId)return;
+  const bubble=view.list.querySelector(`[data-message-id="${CSS.escape(message.id)}"]`);
+  if(!bubble || bubble.querySelector('[data-schedule-offer]'))return;
+  const offer=document.createElement('button');
+  offer.type='button';
+  offer.dataset.scheduleOffer='';
+  offer.textContent='일정 카드 쓰기';
+  offer.addEventListener('click',()=>{
+    if(isCurrentSendView(view) && view.list.contains(bubble))showScheduleProposal(message,proposal);
+  });
+  bubble.append(offer);
+}
+
 async function sendChatMessage(room,body){
-  // Start the schedule check before the message round-trip finishes.
-  if(shouldAskScheduleAi(body)){
-    if(schedulePrefetch.text===body&&schedulePrefetch.timer){clearTimeout(schedulePrefetch.timer);schedulePrefetch.timer=null;void runSchedulePrefetch(body)}
-    else if(schedulePrefetch.text!==body){schedulePrefetch={text:body,result:null,promise:null,timer:null};void runSchedulePrefetch(body)}
+  const view={room,userId:signedInId,list:document.querySelector('.chat #messages')};
+  if(!isCurrentSendView(view))return;
+  const input=document.querySelector('#text');
+  const sender=signedIn;
+  // Each result belongs to one outgoing message. A draft, reply, or later room
+  // snapshot cannot reuse it. Posting does not wait for classification.
+  const decision=/\p{L}/u.test(body)
+    ? api('/api/ai/schedule',{method:'POST',body:JSON.stringify({text:body})}).catch(()=>null)
+    : Promise.resolve(null);
+  try{
+    const message=await api(`/api/rooms/${room}/messages`,{method:'POST',body:JSON.stringify({sender,body})});
+    if(!isCurrentSendView(view))return;
+    removePendingBubble();
+    displaySentMessage(message);
+    void decision.then(proposal=>offerScheduleOnMessage(view,message,proposal));
+  }catch{
+    if(!isCurrentSendView(view))return;
+    removePendingBubble();
+    if(input)input.value=body;
+    setAiStatus('보내지 못했어요. 다시 보내 주세요.');
+  }finally{
+    if(input && isCurrentSendView(view)){
+      input.disabled=false;
+      input.placeholder='메시지를 입력하세요';
+      input.focus();
+    }
   }
-  const message=await api(`/api/rooms/${room}/messages`,{method:'POST',body:JSON.stringify({sender:signedIn,body})});
-  const context=[...roomMessages,message].slice(-6).map(item=>`${item.sender}: ${item.body}`);
-  await openRoom(room);await maybeScheduleFromMessage(message,context)
 }
 async function send(event){event.preventDefault();if(pendingSend)return;const input=document.querySelector('#text'),body=input?.value.trim();if(!body)return;const useApprovedRewrite=Boolean(rewrittenApprovedText)&&body===rewrittenApprovedText;rewrittenApprovedText='';if(useApprovedRewrite){input.value='';input.disabled=true;await sendChatMessage(roomId,body);return}pendingSend={body,room:roomId};input.value='';input.disabled=true;const saved=aiIntervention!=='off'&&!strongExpression(body)&&savedAiResult(body);input.placeholder=aiIntervention==='off'?'메시지를 보내고 있어요…':saved?'이전 확인 결과를 사용해요…':'AI가 확인 중이에요…';addPendingBubble(body);try{showCheckResult(await checkForSend(body))}catch{await sendApproved()}}
 async function rewritePending(){if(!pendingSend)return;const button=document.querySelector('.modal-actions .quiet');if(button){button.disabled=true;button.textContent='표현을 다듬는 중…'}try{const out=await api('/api/ai/rewrite',{method:'POST',body:JSON.stringify({text:pendingSend.body,context:messageContext(),sender:signedIn})});if(out.suggestion){pendingSend.body=out.suggestion;rewrittenApprovedText=out.suggestion.trim();editPendingSend();return}if(button){button.disabled=false;button.textContent='표현 바꾸기'}alert(out.error==='OPENAI_API_KEY_MISSING'?'AI 표현 바꾸기를 사용하려면 Render 환경 변수 OPENAI_API_KEY를 설정해 주세요.':'표현을 바꾸지 못했어요. 잠시 후 다시 시도해 주세요.')}catch{if(button){button.disabled=false;button.textContent='표현 바꾸기'}alert('표현을 바꾸지 못했어요. 네트워크 연결을 확인해 주세요.')}}
@@ -196,20 +263,6 @@ function strongExpression(text){const compact=String(text||'').toLowerCase().rep
 async function openRoom(id){roomId=id;if(!data)data=await api('/api/bootstrap');const room=data.rooms.find(item=>item.id===id);if(!room)return home();await loadUserAvatars();const messages=await api(`/api/rooms/${id}/messages`);roomMessages=messages.slice();await api(`/api/rooms/${id}/read`,{method:'POST',body:JSON.stringify({reader:signedIn})});markMessagesRead(messages);unreadCounts[id]=0;const title=roomDisplayName(room),names=roomPeople(room).join(', ');app.innerHTML=`<main class="layout android-layout">${rail()}<section class="chat"><header class="head chat-head"><button class="back" onclick="home()">‹</button><div class="room-title"><h1>${esc(title)}</h1><span>${esc(names)} · ${room.members}명</span></div><div class="chat-actions"><button onclick="inviteFriends()">＋ 초대</button><button onclick="newAgreement()">✓</button></div></header><div class="room-notice-host" id="room-schedule-notice">${roomScheduleNotice(id)}</div><section class="messages" id="messages">${messages.map(view).join('')}${data.agreements.slice(0,1).map(agreement=>`<article class="agreement"><b>✓ 공동 확인 · ${esc(agreement.task)}</b><small>담당 ${esc(agreement.assignee)} · ${esc(agreement.deadline)}</small></article>`).join('')}</section><form class="sendbar" onsubmit="send(event)"><input id="text" placeholder="메시지를 입력하세요" autocomplete="off" oninput="handleChatInput(this.value)"><span id="ai-status" class="ai-status"></span><button aria-label="보내기">↑</button></form></section></main>`;const list=document.querySelector('#messages');list.scrollTop=list.scrollHeight;document.querySelector('#text')?.focus();updateUnreadUi();startInboxPolling()}
 function rewriteMessageContext(){return roomMessages.slice(-6).map(message=>`${message.sender===signedIn?'[현재 사용자]':'[상대]'} ${message.sender}: ${message.body}`)}
 async function rewritePending(){if(!pendingSend)return;const button=document.querySelector('.modal-actions .quiet');if(button){button.disabled=true;button.textContent='표현을 다듬는 중…'}try{const out=await api('/api/ai/rewrite',{method:'POST',body:JSON.stringify({text:pendingSend.body,context:rewriteMessageContext(),sender:signedIn})});if(out.suggestion){pendingSend.body=out.suggestion;rewrittenApprovedText=out.suggestion.trim();editPendingSend();return}if(button){button.disabled=false;button.textContent='표현 바꾸기'}alert(out.error==='OPENAI_API_KEY_MISSING'?'AI 표현 바꾸기를 사용하려면 Render 환경 변수 OPENAI_API_KEY를 설정해 주세요.':'표현을 바꾸지 못했어요. 잠시 후 다시 시도해 주세요.')}catch{if(button){button.disabled=false;button.textContent='표현 바꾸기'}alert('표현을 바꾸지 못했어요. 네트워크 연결을 확인해 주세요.')}}
-function proposalInputValue(value){return esc(value).replace(/"/g,'&quot;')}
-function proposalFieldsMarkup(){const fields=pendingScheduleProposal?.proposal?.fields||[];return fields.map((field,index)=>`<div class="schedule-proposal-field"><input value="${proposalInputValue(field.label)}" aria-label="항목 이름" oninput="updateProposalField(${index},'label',this.value)"><input value="${proposalInputValue(field.value)}" placeholder="비어 있음" aria-label="항목 내용" oninput="updateProposalField(${index},'value',this.value)"><button type="button" title="항목 삭제" onclick="removeProposalField(${index})">×</button></div>`).join('')}
-function refreshProposalFields(){const editor=document.querySelector('#schedule-proposal-fields');if(editor)editor.innerHTML=proposalFieldsMarkup()}
-function updateProposalField(index,key,value){if(pendingScheduleProposal?.proposal?.fields?.[index])pendingScheduleProposal.proposal.fields[index][key]=value}
-function addProposalField(){if(!pendingScheduleProposal)return;pendingScheduleProposal.proposal.fields.push({label:'세부사항',value:''});refreshProposalFields()}
-function removeProposalField(index){if(!pendingScheduleProposal)return;pendingScheduleProposal.proposal.fields.splice(index,1);refreshProposalFields()}
-function scheduleProposalMarkup(proposal){return `<div class="schedule-proposal"><span>📅 일정으로 보이는 메시지예요</span><label class="schedule-proposal-title">일정 제목<input id="schedule-proposal-title" value="${proposalInputValue(proposal.title||'일정')}" aria-label="일정 제목" oninput="updateProposalTitle(this.value)"></label><div id="schedule-proposal-fields">${proposalFieldsMarkup()}</div><button type="button" class="add-proposal-field" onclick="addProposalField()">＋ 항목 추가</button><small>제목과 항목을 직접 확인·수정한 뒤 이 일정 카드를 채팅방에 표시할 수 있어요.</small><div class="modal-actions"><button class="quiet" onclick="dismissScheduleProposal()">사용 안 함</button><button onclick="acceptScheduleProposal()">일정 카드 쓰기</button></div></div>`}
-function showScheduleProposal(message,proposal){pendingScheduleProposal={message,proposal:{...proposal,fields:(proposal.fields||[]).map(field=>({label:field.label||'',value:field.value||''}))}};popup(scheduleProposalMarkup(pendingScheduleProposal.proposal))}
-function updateProposalTitle(value){if(pendingScheduleProposal?.proposal)pendingScheduleProposal.proposal.title=value}
-async function acceptScheduleProposal(){if(!pendingScheduleProposal)return;const {message}=pendingScheduleProposal;const title=(document.querySelector('#schedule-proposal-title')?.value||pendingScheduleProposal.proposal.title||'').trim();const fields=[...document.querySelectorAll('#schedule-proposal-fields .schedule-proposal-field')].map(row=>{const inputs=row.querySelectorAll('input');return {label:(inputs[0]?.value||'').trim(),value:(inputs[1]?.value||'').trim()}}).filter(field=>field.label);if(!title)return alert('일정 제목을 입력해 주세요.');const proposal={...pendingScheduleProposal.proposal,title,fields};pendingScheduleProposal=null;const button=document.querySelector('.schedule-proposal .modal-actions button:last-child');if(button){button.disabled=true;button.textContent='만드는 중…'}try{await api('/api/appointments',{method:'POST',body:JSON.stringify({title:proposal.title,fields:proposal.fields,creator:message.sender,source_message_id:message.id,room_id:message.room_id})});data=await api('/api/bootstrap');closePopup();renderRoomScheduleNotice();updateScheduleUi();document.querySelector('#text')?.focus()}catch{if(button){button.disabled=false;button.textContent='일정 카드 쓰기'}alert('일정 카드를 만들지 못했어요. 다시 시도해 주세요.')}}
-function scheduleCard(appointment,chat=false){return `<article class="schedule-item ${chat?'chat-schedule-card':''}" data-schedule-id="${appointment.id}"><button class="schedule-cancel" title="내 화면에서 숨기기" onclick="hideScheduleCard('${appointment.id}')">×</button><button class="schedule-edit" onclick="editAppointment('${appointment.id}')"><strong>${esc(appointment.title||'일정')}</strong>${(appointment.fields||[]).map(field=>`<span class="schedule-field"><b>${esc(field.label)}</b><i>${esc(field.value)||'비어 있음'}</i></span>`).join('')}</button></article>`}
-function allScheduleList(appointments){return appointments.map(item=>`<button class="schedule-list-row" onclick="closePopup();editAppointment('${item.id}')"><strong>${esc(item.title||'일정')}</strong><span>${scheduleNoticeFields(item)||'입력된 세부사항이 없어요.'}</span></button>`).join('')}
-function showAllSchedules(){const appointments=visibleAppointments().slice().reverse();popup(`<div class="group-modal schedule-list"><h2>전체 일정</h2><p>일정을 누르면 내용을 수정할 수 있어요.</p>${appointments.length?allScheduleList(appointments):'<p>표시할 일정이 없어요.</p>'}<button class="quiet schedule-list-close" onclick="closePopup()">닫기</button></div>`)}
-function appointmentItems(){const appointments=visibleAppointments().slice().reverse();return appointments.length?`${scheduleCard(appointments[0])}${appointments.length>1?`<button class="all-schedules-button" onclick="showAllSchedules()">다른 일정 ${appointments.length-1}개 보기</button>`:''}`:'<span>아직 잡힌 일정이 없어요.</span>'}
 const avatarStorageKey=()=>`retone-v2-avatar-v2-${signedInId||'guest'}`;
 const statusStorageKey=()=>`retone-v2-status-v1-${signedInId||'guest'}`;
 async function loadUserAvatars(){const users=await api('/api/users');userAvatarByName=Object.fromEntries(users.map(user=>[user.name,user.avatar_url]));const mine=users.find(user=>user.id===signedInId);localStorage.removeItem('retone-avatar');if(mine?.avatar_url)localStorage.setItem(avatarStorageKey(),mine.avatar_url);else localStorage.removeItem(avatarStorageKey());return users}
@@ -273,13 +326,14 @@ function showCheckResult(result){
 }
 async function send(event){
   event.preventDefault();
+  if(pendingSend && !isCurrentSendView(pendingSend))pendingSend=null;
   if(pendingSend)return;
   const input=document.querySelector('#text'),body=input?.value.trim();
   if(!body)return;
   const useApprovedRewrite=Boolean(rewrittenApprovedText)&&body===rewrittenApprovedText;
   rewrittenApprovedText='';
   if(useApprovedRewrite){input.value='';input.disabled=true;await sendChatMessage(roomId,body);return;}
-  const next={body,room:roomId,token:crypto.randomUUID()};
+  const next={body,room:roomId,userId:signedInId,list:document.querySelector('.chat #messages')};
   pendingSend=next;
   input.value='';input.disabled=true;
   input.placeholder='AI가 확인 중이에요…';
@@ -287,9 +341,12 @@ async function send(event){
   try{
     const result=await checkForSend(body);
     if(pendingSend!==next)return;
+    if(!isCurrentSendView(next)){pendingSend=null;return;}
     showCheckResult(result);
   }catch{
-    if(pendingSend===next)showCheckResult({error:'AI_CHECK_UNAVAILABLE',source:'unavailable'});
+    if(pendingSend!==next)return;
+    if(!isCurrentSendView(next)){pendingSend=null;return;}
+    showCheckResult({error:'AI_CHECK_UNAVAILABLE',source:'unavailable'});
   }
 }
 // Old preview results were made while the conversation was included in the
@@ -349,65 +406,11 @@ async function saveStatusMessage(){
 }
 async function settings(){
   nav='settings';
+  roomId=null;
+  stopMessageFeed();
   try{await loadUserAvatars()}catch{}
   const mine=userProfilesById[signedInId]||{},avatar=mine.avatar_url||localStorage.getItem(avatarStorageKey()),status=mine.status_message?.trim()||'';
   app.innerHTML=`<main class="layout android-layout">${rail()}<section class="page"><header class="head"><h1>설정</h1></header><div class="content"><div class="rooms"><label class="room"><span class="avatar">${avatarMarkup(signedIn,avatar)}</span><span class="copy"><b>프로필 사진 바꾸기</b><span>이 계정의 친구·채팅 화면에 표시돼요.</span></span><input hidden type="file" accept="image/*" onchange="setAvatar(this)"></label><section class="profile-status"><b>상태메시지</b><p>${status?`현재 상태: ${esc(status)}`:'친구에게 보여줄 짧은 한마디를 적어 보세요.'}</p><div><input id="status-message" maxlength="60" value="" placeholder="${status?'새 상태메시지 입력':'예: 오늘은 답장이 조금 늦어요'}"><button onclick="saveStatusMessage()">저장</button></div></section><button class="room" onclick="showAiPolicy()"><span class="avatar">✦</span><span class="copy"><b>AI 사용 안내</b><span>대화 도움의 사용 범위를 확인해요.</span></span></button><button class="room danger" onclick="deleteMyAccount()"><span class="avatar">−</span><span class="copy"><b>회원탈퇴</b><span>이 앱의 계정과 데모 데이터를 삭제해요.</span></span></button><button class="room" onclick="logout()"><span class="avatar">↪</span><span class="copy"><b>로그아웃</b><span>이 기기에서 안전하게 로그아웃해요.</span></span></button></div></div></section>${androidNav()}</main>`;
-}
-async function deleteOwnSchedule(id){
-  if(!confirm('이 일정을 모두의 화면에서 삭제할까요?'))return;
-  try{
-    await api(`/api/appointments/${id}/creator/${encodeURIComponent(signedIn)}`,{method:'DELETE'});
-    data=await api('/api/bootstrap');
-    renderRoomScheduleNotice();updateScheduleUi();
-  }catch{alert('일정을 삭제하지 못했어요. 내가 만든 일정인지 확인해 주세요.')}
-}
-async function saveAppointment(){
-  const title=document.querySelector('#appointmentTitle')?.value.trim(),date=document.querySelector('#appointmentDate')?.value;
-  if(!title||!date)return alert('일정 이름과 시간을 입력해 주세요.');
-  await api('/api/appointments',{method:'POST',body:JSON.stringify({title,date:date.replace('T',' '),place:document.querySelector('#appointmentPlace')?.value||'',creator:signedIn,room_id:roomId||null})});
-  data=await api('/api/bootstrap');closePopup();
-  if(roomId)await openRoom(roomId);else await home();
-}
-function scheduleCard(appointment,chat=false){
-  const own=appointment.creator===signedIn;
-  return `<article class="schedule-item ${chat?'chat-schedule-card':''}" data-schedule-id="${appointment.id}"><button class="schedule-cancel" title="내 화면에서 숨기기" onclick="hideScheduleCard('${appointment.id}')">×</button>${own?`<button class="schedule-delete-global" title="모두에게서 일정 삭제" onclick="deleteOwnSchedule('${appointment.id}')">삭제</button>`:''}<button class="schedule-edit" onclick="editAppointment('${appointment.id}')"><strong>${esc(appointment.title||'일정')}</strong>${(appointment.fields||[]).map(field=>`<span class="schedule-field"><b>${esc(field.label)}</b><i>${esc(field.value)||'비어 있음'}</i></span>`).join('')}</button></article>`;
-}
-function roomScheduleNotice(room){
-  const appointments=roomAppointments(room);if(!appointments.length)return '';
-  const latest=appointments[0],summary=scheduleNoticeFields(latest),own=latest.creator===signedIn;
-  return `<aside class="room-notice" data-schedule-signature="${esc(appointments.map(item=>item.id).join('|'))}"><span class="notice-pin">📌</span><button class="notice-main" onclick="editAppointment('${latest.id}')"><b>${esc(latest.title||'일정')}</b><small>${summary||'일정 내용을 확인해 주세요.'}</small></button><button class="notice-view" onclick="showRoomSchedules('${room}')">보기${appointments.length>1?` ${appointments.length}`:''}</button>${own?`<button class="notice-delete" onclick="deleteOwnSchedule('${latest.id}')">삭제</button>`:''}<button class="notice-close" title="내 화면에서 숨기기" onclick="hideScheduleCard('${latest.id}')">×</button></aside>`;
-}
-function editAppointment(id){
-  const appointment=(data?.appointments||[]).find(item=>item.id===id);
-  if(!appointment)return;
-  if(appointment.creator!==signedIn)return alert('이 일정은 만든 사람만 수정할 수 있어요.');
-  scheduleDraftFields=(appointment.fields||[]).map(field=>({label:field.label,value:field.value}));
-  popup(scheduleForm(appointment.title,`saveAppointmentEdit('${id}')`));
-}
-async function saveAppointmentEdit(id){
-  const title=document.querySelector('#appointmentTitle')?.value.trim();
-  if(!title)return alert('일정 제목을 입력해 주세요.');
-  try{
-    await api(`/api/appointments/${id}/creator/${encodeURIComponent(signedIn)}`,{method:'PATCH',body:JSON.stringify({title,fields:scheduleDraftFields})});
-    data=await api('/api/bootstrap');
-    alert('저장되었습니다.');
-    closePopup();
-    if(roomId)await openRoom(roomId);else await home();
-  }catch{alert('일정을 수정하지 못했어요. 만든 사람만 수정할 수 있어요.')}
-}
-function scheduleFieldsMarkup(appointment){return (appointment.fields||[]).map(field=>`<span class="schedule-field"><b>${esc(field.label)}</b><i>${esc(field.value)||'비어 있음'}</i></span>`).join('')}
-function scheduleCard(appointment,chat=false){
-  const own=appointment.creator===signedIn,details=`<strong>${esc(appointment.title||'일정')}</strong>${scheduleFieldsMarkup(appointment)}`;
-  return `<article class="schedule-item ${chat?'chat-schedule-card':''}" data-schedule-id="${appointment.id}"><button class="schedule-cancel" title="내 화면에서 숨기기" onclick="hideScheduleCard('${appointment.id}')">×</button>${own?`<button class="schedule-delete-global" title="모두에게서 일정 삭제" onclick="deleteOwnSchedule('${appointment.id}')">삭제</button>`:''}${own?`<button class="schedule-edit" onclick="editAppointment('${appointment.id}')">${details}</button>`:`<div class="schedule-edit">${details}</div>`}</article>`;
-}
-function roomScheduleNotice(room){
-  const appointments=roomAppointments(room);if(!appointments.length)return '';
-  const latest=appointments[0],summary=scheduleNoticeFields(latest),own=latest.creator===signedIn,contents=`<b>${esc(latest.title||'일정')}</b><small>${summary||'일정 내용을 확인해 주세요.'}</small>`;
-  return `<aside class="room-notice" data-schedule-signature="${esc(appointments.map(item=>item.id).join('|'))}"><span class="notice-pin">📌</span>${own?`<button class="notice-main" onclick="editAppointment('${latest.id}')">${contents}</button>`:`<div class="notice-main">${contents}</div>`}<button class="notice-view" onclick="showRoomSchedules('${room}')">보기${appointments.length>1?` ${appointments.length}`:''}</button>${own?`<button class="notice-delete" onclick="deleteOwnSchedule('${latest.id}')">삭제</button>`:''}<button class="notice-close" title="내 화면에서 숨기기" onclick="hideScheduleCard('${latest.id}')">×</button></aside>`;
-}
-function showRoomSchedules(room){
-  const appointments=roomAppointments(room);
-  popup(`<div class="group-modal schedule-list"><h2>이 채팅방 일정</h2><p>만든 사람은 일정을 눌러 수정할 수 있어요.</p>${appointments.length?appointments.map(item=>`<div class="schedule-list-row"><strong>${esc(item.title||'일정')}</strong><span>${scheduleNoticeFields(item)||'입력된 세부사항이 없어요.'}</span>${item.creator===signedIn?`<button onclick="closePopup();editAppointment('${item.id}')">수정</button>`:''}</div>`).join(''):'<p>표시할 일정이 없어요.</p>'}<button class="quiet schedule-list-close" onclick="closePopup()">닫기</button></div>`);
 }
 async function openRoom(id){
   roomId=id;if(!data)data=await api('/api/bootstrap');const room=data.rooms.find(item=>item.id===id);if(!room)return home();
@@ -443,7 +446,7 @@ async function respondFriendRequest(id,accept){try{await api(`/api/friend-reques
 async function friends(){nav='friends';const list=await api(`/api/friends/${signedInId}`),requests=await refreshFriendRequests(false);list.forEach(user=>{userProfilesById[user.id]=user;userProfilesByName[user.name]=user;userAvatarByName[user.name]=user.avatar_url||null});app.innerHTML=`<main class="layout android-layout">${rail()}<section class="page"><header class="head"><h1>친구</h1><div class="friend-head-actions"><button type="button" class="friend-request-bell" aria-label="친구 요청 알림" title="친구 요청" onclick="void showFriendRequests()">🔔 <span>요청</span><i data-friend-request-count ${requests.length?'':'hidden'}>${requests.length>9?'9+':requests.length}</i></button><button class="new-room" onclick="addFriend()">＋ 친구 추가</button></div></header><div class="content"><div class="intro"><h2>내 친구</h2><p>${list.length?'친구를 눌러 1:1 대화를 시작하세요.':'아직 친구가 없어요. 전화번호로 친구 요청을 보내 보세요.'}</p></div><div class="rooms">${list.length?list.map(user=>`<div class="friend-row"><button class="friend-profile-button" aria-label="${esc(user.name)} 프로필 보기" onclick="showUserProfile('${user.id}')">${avatarMarkup(user.name,user.avatar_url)}</button><button class="room" onclick="startDirect('${esc(user.name)}','${user.id}')"><span class="copy"><b>${esc(user.name)}</b><span>${esc(user.status_message?.trim()||'눌러서 1:1 대화 시작')}</span></span><span>›</span></button></div>`).join(''):`<div class="empty-chat"><b>친구가 없어요</b><span>오른쪽 위 ‘친구 추가’에서 전화번호로 요청을 보내세요.</span></div>`}</div></div></section>${androidNav()}</main>`;startFriendRequestPolling()}
 async function startDirect(name,userId){const directKey=[signedInId,userId].sort().join(':');const room=await api('/api/rooms',{method:'POST',body:JSON.stringify({name,members:[name],member_ids:[userId],direct_key:directKey,owner:signedIn,owner_id:signedInId})});data=await api('/api/bootstrap');openRoom(room.id)}
 async function refreshInbox(loadRooms=true){if(!signedIn||inboxSyncing)return;inboxSyncing=true;try{if(loadRooms||!data)data=await api('/api/bootstrap');const rooms=accessibleRooms();const batches=await Promise.all(rooms.map(room=>api(`/api/rooms/${room.id}/messages`)));const reads=[],seen=readSeenMessages();batches.forEach((messages,index)=>{const room=rooms[index];if(room.id===roomId){const incoming=messages.filter(message=>!isMyMessage(message));incoming.forEach(message=>seen.add(message.id));if(incoming.some(message=>message.unread>0))reads.push(api(`/api/rooms/${room.id}/read`,{method:'POST',body:JSON.stringify({reader:signedIn})}));appendNewMessages(messages);updateReadReceipts(messages)}unreadCounts[room.id]=messages.filter(message=>!isMyMessage(message)&&!seen.has(message.id)).length});await Promise.all(reads);writeSeenMessages(seen);updateUnreadUi();updateScheduleUi()}catch{}finally{inboxSyncing=false}}
-async function home(){nav='chat';roomId=null;data=await api('/api/bootstrap');await refreshInbox(false);const rooms=accessibleRooms();app.innerHTML=`<main class="layout android-layout">${rail()}<section class="page"><header class="head"><div><small class="mobile-kicker">Re:Tone</small><h1>채팅</h1></div></header><div class="content"><div class="rooms">${rooms.length?rooms.map(room=>{const name=roomDisplayName(room);return `<button class="room" data-room-id="${esc(room.id)}" onclick="openRoom('${room.id}')"><span class="avatar">${esc(name[0])}</span><span class="copy"><b>${esc(name)}</b><span>${esc(room.last)}</span></span><span class="badge" data-room-unread hidden></span></button>`}).join(''):`<button class="empty-chat" onclick="friends()"><b>대화가 없습니다</b><span>친구를 추가해 대화를 시작하세요.</span></button>`}</div><div class="dash">${scheduleCards()}</div></div></section>${androidNav()}</main>`;updateUnreadUi();startInboxPolling();startFriendRequestPolling()}
+async function home(){nav='chat';roomId=null;stopMessageFeed();data=await api('/api/bootstrap');await refreshInbox(false);if(roomId||nav!=='chat')return;const rooms=accessibleRooms();app.innerHTML=`<main class="layout android-layout">${rail()}<section class="page"><header class="head"><div><small class="mobile-kicker">Re:Tone</small><h1>채팅</h1></div></header><div class="content"><div class="rooms">${rooms.length?rooms.map(room=>{const name=roomDisplayName(room);return `<button class="room" data-room-id="${esc(room.id)}" onclick="openRoom('${room.id}')"><span class="avatar">${esc(name[0])}</span><span class="copy"><b>${esc(name)}</b><span>${esc(room.last)}</span></span><span class="badge" data-room-unread hidden></span></button>`}).join(''):`<button class="empty-chat" onclick="friends()"><b>대화가 없습니다</b><span>친구를 추가해 대화를 시작하세요.</span></button>`}</div><div class="dash">${scheduleCards()}</div></div></section>${androidNav()}</main>`;updateUnreadUi();startInboxPolling();startFriendRequestPolling()}
 async function openRoom(id){roomId=id;if(!data)data=await api('/api/bootstrap');const room=data.rooms.find(item=>item.id===id);if(!room||!accessibleRooms().some(item=>item.id===id))return home();await loadUserAvatars();const messages=await api(`/api/rooms/${id}/messages`);roomMessages=messages.slice();await api(`/api/rooms/${id}/read`,{method:'POST',body:JSON.stringify({reader:signedIn})});markMessagesRead(messages);unreadCounts[id]=0;const title=roomDisplayName(room),names=roomPeople(room).join(', '),profile=userProfilesByName[title],titleMarkup=profile?`<button class="chat-profile-trigger" onclick="showUserProfile('${profile.id}')"><h1>${esc(title)}</h1><span>${esc(names)} · ${room.members}명</span></button>`:`<div class="room-title"><h1>${esc(title)}</h1><span>${esc(names)} · ${room.members}명</span></div>`;app.innerHTML=`<main class="layout android-layout">${rail()}<section class="chat"><header class="head chat-head"><button class="back" onclick="home()">‹</button>${titleMarkup}<div class="chat-actions"><button onclick="inviteFriends()">＋ 초대</button><button onclick="newAgreement()">✓</button></div></header><div class="room-notice-host" id="room-schedule-notice">${roomScheduleNotice(id)}</div><section class="messages" id="messages">${messages.map(view).join('')}${data.agreements.slice(0,1).map(agreement=>`<article class="agreement"><b>✓ 공동 확인 · ${esc(agreement.task)}</b><small>담당 ${esc(agreement.assignee)} · ${esc(agreement.deadline)}</small></article>`).join('')}</section><form class="sendbar" onsubmit="send(event)"><input id="text" placeholder="메시지를 입력하세요" autocomplete="off" oninput="handleChatInput(this.value)"><span id="ai-status" class="ai-status"></span><button aria-label="보내기">↑</button></form></section></main>`;const list=document.querySelector('#messages');list.scrollTop=list.scrollHeight;document.querySelector('#text')?.focus();updateUnreadUi();startInboxPolling();startFriendRequestPolling()}
 function logout(){stopInboxPolling();stopFriendRequestPolling();clearStoredSession();start()}
 
@@ -458,12 +461,82 @@ function startFriendRequestPolling(){clearInterval(friendRequestTimer);if(signed
 function stopFriendRequestPolling(){clearInterval(friendRequestTimer);friendRequestTimer=null;friendRequestIds.clear();friendshipIds.clear();friendshipReady=false;document.querySelector('#friend-request-toast')?.remove()}
 function showUserProfile(userId){const user=userProfilesById[userId]||userProfilesByName[userId];if(!user)return;const status=user.status_message?.trim()||'등록한 상태메시지가 없어요.',remove=friendshipIds.has(user.id)&&user.id!==signedInId?`<button class="profile-unfriend" onclick="deleteFriend('${user.id}','${esc(user.name)}')">친구 삭제</button>`:'';popup(`<div class="user-profile-modal"><div class="user-profile-avatar">${avatarMarkup(user.name,user.avatar_url)}</div><h2>${esc(user.name)}</h2><p>${esc(status)}</p>${remove}<button onclick="closePopup()">닫기</button></div>`)}
 async function deleteFriend(friendId,name){if(!confirm(`${name}님을 친구에서 삭제할까요? 1:1 채팅방도 함께 사라집니다.`))return;try{await api(`/api/friends/${signedInId}/remove/${friendId}`,{method:'DELETE'});friendshipIds.delete(friendId);closePopup();alert('친구를 삭제했어요.');if(nav==='friends')friends();else home()}catch{alert('친구 삭제를 하지 못했어요.')}}
-async function friends(){nav='friends';const list=await refreshFriendshipState(false),requests=await refreshFriendRequests(false);app.innerHTML=`<main class="layout android-layout">${rail()}<section class="page"><header class="head"><h1>친구</h1><div class="friend-head-actions"><button type="button" class="friend-request-bell" aria-label="친구 요청 알림" title="친구 요청" onclick="void showFriendRequests()">🔔 <span>요청</span><i data-friend-request-count ${requests.length?'':'hidden'}>${requests.length>9?'9+':requests.length}</i></button><button class="new-room" onclick="addFriend()">＋ 친구 추가</button></div></header><div class="content"><div class="rooms">${list.length?list.map(user=>`<div class="friend-row"><button class="friend-profile-button" aria-label="${esc(user.name)} 프로필 보기" onclick="showUserProfile('${user.id}')">${avatarMarkup(user.name,user.avatar_url)}</button><button class="room" onclick="startDirect('${esc(user.name)}','${user.id}')"><span class="copy"><b>${esc(user.name)}</b><span>${esc(user.status_message?.trim()||'')}</span></span><span>›</span></button><button class="unfriend-square" title="친구 삭제" onclick="deleteFriend('${user.id}','${esc(user.name)}')">×</button></div>`).join(''):`<div class="empty-chat"><b>친구가 없습니다</b></div>`}</div></div></section>${androidNav()}</main>`;startFriendRequestPolling()}
-async function refreshInbox(loadRooms=true){if(!signedIn||inboxSyncing)return;inboxSyncing=true;try{if(loadRooms||!data)data=await api('/api/bootstrap');const rooms=accessibleRooms(),batches=await Promise.all(rooms.map(room=>api(`/api/rooms/${room.id}/messages`))),reads=[],seen=readSeenMessages();batches.forEach((messages,index)=>{const room=rooms[index],viewingRoom=room.id===roomId&&Boolean(document.querySelector('.chat #messages'));if(viewingRoom){const incoming=messages.filter(message=>!isMyMessage(message));incoming.forEach(message=>seen.add(message.id));if(incoming.some(message=>message.unread>0))reads.push(api(`/api/rooms/${room.id}/read`,{method:'POST',body:JSON.stringify({reader:signedIn})}));appendNewMessages(messages);updateReadReceipts(messages)}unreadCounts[room.id]=roomIsMuted(room.id)?0:messages.filter(message=>!isMyMessage(message)&&!seen.has(message.id)).length});await Promise.all(reads);writeSeenMessages(seen);updateUnreadUi();updateScheduleUi()}catch{}finally{inboxSyncing=false}}
-function roomMenu(){const room=data?.rooms.find(item=>item.id===roomId);if(!room)return;popup(`<div class="room-menu"><h2>채팅방 메뉴</h2><button onclick="closePopup();showRoomSchedules('${room.id}')">일정 전체 보기</button><button onclick="toggleRoomMute()">${roomIsMuted(room.id)?'알림 켜기':'채팅방 알림 끄기'}</button><button class="room-leave" onclick="leaveCurrentRoom()">채팅방 나가기</button><button class="quiet" onclick="closePopup()">닫기</button></div>`)}
+async function friends(){nav='friends';roomId=null;stopMessageFeed();const list=await refreshFriendshipState(false),requests=await refreshFriendRequests(false);app.innerHTML=`<main class="layout android-layout">${rail()}<section class="page"><header class="head"><h1>친구</h1><div class="friend-head-actions"><button type="button" class="friend-request-bell" aria-label="친구 요청 알림" title="친구 요청" onclick="void showFriendRequests()">🔔 <span>요청</span><i data-friend-request-count ${requests.length?'':'hidden'}>${requests.length>9?'9+':requests.length}</i></button><button class="new-room" onclick="addFriend()">＋ 친구 추가</button></div></header><div class="content"><div class="rooms">${list.length?list.map(user=>`<div class="friend-row"><button class="friend-profile-button" aria-label="${esc(user.name)} 프로필 보기" onclick="showUserProfile('${user.id}')">${avatarMarkup(user.name,user.avatar_url)}</button><button class="room" onclick="startDirect('${esc(user.name)}','${user.id}')"><span class="copy"><b>${esc(user.name)}</b><span>${esc(user.status_message?.trim()||'')}</span></span><span>›</span></button><button class="unfriend-square" title="친구 삭제" onclick="deleteFriend('${user.id}','${esc(user.name)}')">×</button></div>`).join(''):`<div class="empty-chat"><b>친구가 없습니다</b></div>`}</div></div></section>${androidNav()}</main>`;startFriendRequestPolling()}
+async function refreshInbox(loadRooms=true) {
+  if (!signedIn || inboxSyncing) return;
+  inboxSyncing = true;
+  const user = signedInId;
+  try {
+    if (loadRooms || !data) {
+      const latest = await api('/api/bootstrap');
+      if (user !== signedInId) return;
+      data = latest;
+    }
+    const rooms = accessibleRooms(), feed = messageFeed, request = ++messageRequest;
+    const batches = await Promise.all(rooms.map(room => api(`/api/rooms/${room.id}/messages`)));
+    if (user !== signedInId) return;
+    const reads = [], seen = readSeenMessages();
+    batches.forEach((snapshot, index) => {
+      const room = rooms[index];
+      let messages = snapshot;
+      if (room.id === feed?.room && feedIsVisible(feed)) {
+        if (!reconcileRoomMessages(feed, request, snapshot)) return;
+        messages = roomMessages;
+        const incoming = messages.filter(message => !isMyMessage(message));
+        incoming.forEach(message => seen.add(message.id));
+        if (incoming.some(message => message.unread > 0)) {
+          reads.push(api(`/api/rooms/${room.id}/read`, {method:'POST', body:JSON.stringify({reader:signedIn})}));
+        }
+      }
+      unreadCounts[room.id] = roomIsMuted(room.id) ? 0 : messages.filter(message => !isMyMessage(message) && !seen.has(message.id)).length;
+      const preview = document.querySelector(`.rooms [data-room-id="${room.id}"] .copy > span`);
+      if (preview) preview.textContent = messages.at(-1)?.body || '새 대화를 시작해 보세요.';
+    });
+    await Promise.all(reads);
+    if (user !== signedInId) return;
+    writeSeenMessages(seen);
+    updateUnreadUi();
+    updateScheduleUi();
+  } catch {} finally { inboxSyncing = false; }
+}
+function roomMenu(){const room=data?.rooms.find(item=>item.id===roomId);if(!room)return;popup(`<div class="room-menu"><h2>채팅방 메뉴</h2><button onclick="closePopup();newAppointment()">일정 카드 만들기</button><button onclick="closePopup();showRoomSchedules('${room.id}')">일정 전체 보기</button><button onclick="toggleRoomMute()">${roomIsMuted(room.id)?'알림 켜기':'채팅방 알림 끄기'}</button><button class="room-leave" onclick="leaveCurrentRoom()">채팅방 나가기</button><button class="quiet" onclick="closePopup()">닫기</button></div>`)}
 function toggleRoomMute(){if(!roomId)return;if(roomIsMuted(roomId))localStorage.removeItem(roomMuteKey(roomId));else localStorage.setItem(roomMuteKey(roomId),'1');closePopup();updateUnreadUi();alert(roomIsMuted(roomId)?'이 채팅방 알림을 켰어요.':'이 채팅방 알림을 껐어요.')}
 async function leaveCurrentRoom(){if(!roomId||!confirm('이 채팅방에서 나갈까요? 나간 뒤에는 이전 대화를 볼 수 없어요.'))return;const leavingRoom=roomId;roomId=null;try{await api(`/api/rooms/${leavingRoom}/leave/${signedInId}`,{method:'DELETE'});closePopup();data=await api('/api/bootstrap');home()}catch{alert('채팅방에서 나가지 못했어요.')}}
-async function openRoom(id){roomId=id;if(!data)data=await api('/api/bootstrap');const room=data.rooms.find(item=>item.id===id);if(!room||!accessibleRooms().some(item=>item.id===id))return home();await loadUserAvatars();const messages=await api(`/api/rooms/${id}/messages`);roomMessages=messages.slice();await api(`/api/rooms/${id}/read`,{method:'POST',body:JSON.stringify({reader:signedIn})});markMessagesRead(messages);unreadCounts[id]=0;const title=roomDisplayName(room),names=roomPeople(room).join(', '),profile=userProfilesByName[title],titleMarkup=profile?`<button class="chat-profile-trigger" onclick="showUserProfile('${profile.id}')"><h1>${esc(title)}</h1><span>${esc(names)} · ${room.members}명</span></button>`:`<div class="room-title"><h1>${esc(title)}</h1><span>${esc(names)} · ${room.members}명</span></div>`;app.innerHTML=`<main class="layout android-layout">${rail()}<section class="chat"><header class="head chat-head"><button class="back" onclick="home()">‹</button>${titleMarkup}<div class="chat-actions"><button onclick="inviteFriends()">＋ 초대</button><button onclick="newAgreement()">✓</button><button class="room-more" aria-label="채팅방 메뉴" onclick="roomMenu()">⋯</button></div></header><div class="room-notice-host" id="room-schedule-notice">${roomScheduleNotice(id)}</div><section class="messages" id="messages">${messages.map(view).join('')}</section><form class="sendbar" onsubmit="send(event)"><input id="text" placeholder="메시지를 입력하세요" autocomplete="off" oninput="handleChatInput(this.value)"><span id="ai-status" class="ai-status"></span><button aria-label="보내기">↑</button></form></section></main>`;const list=document.querySelector('#messages');list.scrollTop=list.scrollHeight;document.querySelector('#text')?.focus();updateUnreadUi();startInboxPolling();startFriendRequestPolling()}
+async function openRoom(id) {
+  stopMessageFeed();
+  roomId = id;
+  nav = 'chat';
+  const feed = {room:id, user:signedInId, list:null, events:null, applied:0, deleted:new Set()};
+  messageFeed = feed;
+  if (!data) {
+    const latest = await api('/api/bootstrap');
+    if (!feedIsCurrent(feed)) return;
+    data = latest;
+  }
+  const room = accessibleRooms().find(item => item.id === id);
+  if (!room) return home();
+  await loadUserAvatars();
+  if (!feedIsCurrent(feed)) return;
+  const request = ++messageRequest;
+  const messages = await api(`/api/rooms/${id}/messages`);
+  if (!feedIsCurrent(feed)) return;
+  roomMessages = messages.slice();
+  feed.applied = request;
+  const title=roomDisplayName(room),names=roomPeople(room).join(', '),profile=userProfilesByName[title],titleMarkup=profile?`<button class="chat-profile-trigger" onclick="showUserProfile('${profile.id}')"><h1>${esc(title)}</h1><span>${esc(names)} · ${room.members}명</span></button>`:`<div class="room-title"><h1>${esc(title)}</h1><span>${esc(names)} · ${room.members}명</span></div>`;
+  app.innerHTML=`<main class="layout android-layout">${rail()}<section class="chat"><header class="head chat-head"><button class="back" onclick="home()">‹</button>${titleMarkup}<div class="chat-actions"><button onclick="inviteFriends()">＋ 초대</button><button onclick="newAgreement()">✓</button><button class="room-more" aria-label="채팅방 메뉴" onclick="roomMenu()">⋯</button></div></header><div class="room-notice-host" id="room-schedule-notice">${roomScheduleNotice(id)}</div><section class="messages" id="messages" data-room-id="${esc(id)}">${messages.map(view).join('')}</section><form class="sendbar" onsubmit="send(event)"><input id="text" placeholder="메시지를 입력하세요" autocomplete="off" oninput="handleChatInput(this.value)"><span id="ai-status" class="ai-status"></span><button aria-label="보내기">↑</button></form></section></main>`;
+  feed.list = document.querySelector('#messages');
+  feed.list.scrollTop = feed.list.scrollHeight;
+  document.querySelector('#text')?.focus();
+  watchRoomMessages(feed);
+  markMessagesRead(messages);
+  unreadCounts[id] = 0;
+  updateUnreadUi();
+  startInboxPolling();
+  startFriendRequestPolling();
+  if (messages.some(message => !isMyMessage(message) && message.unread > 0)) {
+    await api(`/api/rooms/${id}/read`, {method:'POST', body:JSON.stringify({reader:signedIn})});
+  }
+}
 let userAvatarByName={};
 function roomPeople(room){return (room.participant_names||[]).filter(Boolean)}
 function avatarSource(url){return url||''}

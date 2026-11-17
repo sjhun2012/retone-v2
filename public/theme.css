@@ -48,6 +48,16 @@ body { background: #faf9fc; color: var(--text); }
 .modal { background: #241b31a3; }
 .modal section { border: 1px solid var(--line); border-radius: 18px; box-shadow: 0 20px 55px #2e203626; }
 .modal section, .auth-card { animation: none; }
+.modal section:has(#schedule-editor, .schedule-list) { max-height: 82dvh; overflow: auto; }
+.schedule-list [data-schedule-list] { display: grid; gap: 10px; }
+.schedule-list-row { min-width: 0; overflow-wrap: anywhere; }
+.schedule-details { display: grid; grid-template-columns: minmax(4ch, 30%) minmax(0, 1fr); gap: 6px 12px; width: 100%; margin: 8px 0; font-size: 14px; line-height: 1.5; }
+.schedule-details dt { color: var(--muted); }
+.schedule-details dd { margin: 0; white-space: pre-wrap; }
+.schedule-card-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.schedule-card-actions:empty { display: none; }
+.schedule-card-actions button { width: auto; padding: 6px 12px; }
+#schedule-editor [data-error] { color: #99363d; }
 .modal p, .ai-check p { color: #696274; }
 .modal-actions .quiet { background: #f0ecf5; color: #5c4b73; }
 .focus.schedule { border-color: #e8e1ef; background: #f8f5fb; color: #5e4e75; }
@@ -83,4 +93,25 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline-color:
   .sendbar input { border-radius: 22px; }
   .sendbar button { border-radius: 16px; }
   .modal section { border-radius: 20px 20px 0 0; }
+}
+.bubble.mine [data-schedule-offer] {
+  display: block;
+  margin: 8px 0 0;
+  padding: 5px 10px;
+  border: 1px solid currentColor;
+  border-radius: 8px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: 0.82rem;
+}
+.bubble.mine .delete-message {
+  display: block;
+}
+@media (hover: hover) and (pointer: fine) {
+  .bubble.mine:not(:hover):not(:focus-within) .delete-message { opacity: 0; }
+}
+@media (hover: none) {
+  .bubble.mine { padding-right: 35px; }
+  .bubble.mine .delete-message { width: 26px; height: 26px; }
 }
