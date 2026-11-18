@@ -27,7 +27,7 @@ async function removeMessage(id){
 function popup(inner){document.body.insertAdjacentHTML('beforeend',`<div class="modal" onclick="if(event.target===this)this.remove()"><section>${inner}</section></div>`)}function closePopup(){document.querySelector('.modal')?.remove()}function newRoom(){popup(`<h2>새 단체 채팅</h2><p>팀·친구와 함께할 대화 공간을 만들어요.</p><input id="roomName" placeholder="예: 과학 수행평가 조"><button onclick="saveRoom()">채팅방 만들기</button>`) }async function saveRoom(){const name=document.querySelector('#roomName').value.trim();if(!name)return;await api('/api/rooms',{method:'POST',body:JSON.stringify({name})});closePopup();home()}function newAgreement(){popup(`<h2>공동 확인 만들기</h2><p>할 일, 담당자, 기한을 함께 확인해요.</p><input id="task" placeholder="할 일"><input id="assignee" placeholder="담당자"><input id="deadline" placeholder="예: 내일 18:00"><button onclick="saveAgreement()">공동 확인 카드 만들기</button>`) }async function saveAgreement(){const task=document.querySelector('#task').value.trim();if(!task)return;await api('/api/agreements',{method:'POST',body:JSON.stringify({task,assignee:document.querySelector('#assignee').value,deadline:document.querySelector('#deadline').value})});closePopup();openRoom(roomId)}
 function popup(inner){document.body.insertAdjacentHTML('beforeend',`<div class="modal" onclick="if(event.target===this)this.remove()"><section>${inner}</section></div>`)}function closePopup(){document.querySelector('.modal')?.remove()}function newRoom(){popup(`<h2>새 단체 채팅</h2><p>팀·친구와 함께할 대화 공간을 만들어요.</p><input id="roomName" placeholder="예: 과학 수행평가 조"><button onclick="saveRoom()">채팅방 만들기</button>`) }async function saveRoom(){const name=document.querySelector('#roomName').value.trim();if(!name)return;await api('/api/rooms',{method:'POST',body:JSON.stringify({name})});closePopup();home()}function newAgreement(){popup(`<h2>공동 확인 만들기</h2><p>할 일, 담당자, 기한을 함께 확인해요.</p><input id="task" placeholder="할 일"><input id="assignee" placeholder="담당자"><input id="deadline" placeholder="예: 내일 18:00"><button onclick="saveAgreement()">공동 확인 카드 만들기</button>`) }async function saveAgreement(){const task=document.querySelector('#task').value.trim();if(!task)return;await api('/api/agreements',{method:'POST',body:JSON.stringify({task,assignee:document.querySelector('#assignee').value,deadline:document.querySelector('#deadline').value})});closePopup();openRoom(roomId)}
 function showAiPolicy(){popup(`<div class="ai-policy"><span>Re:Tone AI 안내 · 2026.11</span><h2>내 대화를 돕기 위한 AI 사용</h2><p><b>왜 개입하나요?</b><br>강한 욕설·위협 표현, 오해될 수 있는 말투, 출처 확인이 중요한 건강·안전·법·금융·재난·속보성 주장을 알리기 위해서예요.</p><p><b>무엇을 보내나요?</b><br>보내려는 메시지와 같은 채팅방의 최근 메시지 최대 6개(화자 포함)를 필요한 경우 OpenAI API로 보내 점검해요. 입력 중에는 입력한 문장만 미리 점검해요. 다른 채팅방 내용이나 계정의 전화번호·비밀번호·프로필은 별도로 보내지 않아요.</p><p><b>무엇을 하지 않나요?</b><br>사실을 거짓이라고 단정하거나, AI가 대신 전송하거나, 경고만으로 메시지를 막지 않아요. 최종 전송은 항상 내가 선택해요.</p><p><b>내가 조절할 수 있는 것</b><br>AI 끄기, 강한 표현만 확인, 균형 있게 확인, 꼼꼼한 확인을 설정에서 언제든 바꿀 수 있어요.</p><small>AI 점검 결과는 같은 문장을 빠르게 처리하기 위해 보관될 수 있으며, 설정에서 AI를 끄면 이후 점검을 멈춰요.</small><button onclick="closePopup()">확인했어요</button></div>`)}function start(){if(signedIn&&!signedInId){sessionStorage.removeItem('retone-v2-name');signedIn=''}if(signedIn)return home();app.innerHTML=`<main class="auth"><section class="auth-card"><div class="auth-brand">Re:<i>Tone</i></div><p class="auth-copy">말하기 전에 한 번,<br>이해한 뒤에 한 번.</p><div class="auth-tabs"><button class="selected" onclick="authForm('login')">로그인</button><button onclick="authForm('signup')">회원가입</button></div><div id="auth-form"></div><small>더 나은 대화와 함께하는 작업 공간</small></section></main>`;authForm('login')}function authForm(mode){const join=mode==='signup';document.querySelectorAll('.auth-tabs button').forEach((b,i)=>b.classList.toggle('selected',(i===1)===join));document.querySelector('#auth-form').innerHTML=`<label>이름<input id="auth-name" placeholder="이름을 입력하세요"></label><label>전화번호<input id="auth-phone" inputmode="numeric" placeholder="전화번호를 입력하세요"></label><label>비밀번호<input id="auth-password" type="password" placeholder="비밀번호를 입력하세요"></label>${join?'<label>AI 개입 정도<select id="auth-ai-level"><option value="light">가볍게 · 강한 욕설만</option><option value="standard" selected>균형 있게 · 말투와 중요한 정보</option><option value="careful">꼼꼼하게 · 더 세심한 확인</option><option value="off">AI 끄기</option></select></label><button type="button" class="ai-policy-link" onclick="showAiPolicy()">AI가 개입하는 이유와 사용 범위 보기</button><label class="consent"><input id="auth-ai-consent" type="checkbox"> AI 사용 안내를 읽었고, 선택한 범위의 점검에 동의해요.</label><p class="auth-hint">동의하지 않아도 AI 끄기를 선택해 가입할 수 있고, 설정에서 언제든 변경할 수 있어요.</p>':''}<button class="auth-submit" onclick="finishAuth('${mode}')">${join?'회원가입하고 시작하기':'로그인'}</button>${join?'<p class="auth-hint">같은 전화번호가 있으면 확인 절차가 안내돼요.</p>':''}`}async function finishAuth(mode){const name=document.querySelector('#auth-name').value.trim(),phone=document.querySelector('#auth-phone').value.replace(/\D/g,''),password=document.querySelector('#auth-password').value,ai=document.querySelector('#auth-ai-level')?.value,consent=document.querySelector('#auth-ai-consent')?.checked;if(!name||!phone||password.length<6)return alert('이름, 전화번호와 6자 이상 비밀번호를 입력해 주세요.');if(mode==='signup'&&ai!=='off'&&!consent)return alert('AI 사용 안내를 확인하고 동의하거나, AI 끄기를 선택해 주세요.');try{const user=await api('/api/auth/'+(mode==='signup'?'signup':'login'),{method:'POST',body:JSON.stringify({name,phone,password,ai_intervention:ai})});signedIn=user.name;signedInId=user.id;aiIntervention=user.ai_intervention||'standard';sessionStorage.setItem('retone-v2-name',user.name);sessionStorage.setItem('retone-v2-user-id',user.id);sessionStorage.setItem('retone-v2-ai-level',aiIntervention);sessionStorage.setItem('retone-v2-ai-consent',consent||aiIntervention==='off'?'yes':'');home()}catch{alert(mode==='signup'?'이미 가입된 전화번호이거나 입력값을 확인해 주세요.':'이름, 전화번호 또는 비밀번호를 다시 확인해 주세요.')}}
-function showAiPolicy(){popup(`<div class="ai-policy"><span>Re:Tone AI 안내 · 2026.11</span><h2>내 대화를 돕기 위한 AI 사용</h2><p><b>왜 개입하나요?</b><br>강한 욕설·위협 표현, 오해될 수 있는 말투, 출처 확인이 중요한 주장을 알리기 위해서예요.</p><p><b>무엇을 보내나요?</b><br>보내려는 메시지와 같은 채팅방의 최근 메시지 최대 6개(화자 포함)를 필요한 경우 OpenAI API로 보내 점검해요. 말 고치기를 열면 같은 범위의 최신 대화를 참고해 원문을 다듬어요. 입력 중에는 입력한 문장만 미리 점검해요. 다른 채팅방 내용이나 계정의 전화번호·비밀번호·프로필은 별도로 보내지 않아요.</p><p><b>무엇을 하지 않나요?</b><br>AI가 대신 전송하거나 경고만으로 메시지를 막지 않아요. 최종 전송은 항상 내가 선택해요.</p><small>AI 점검 결과는 같은 문장을 빠르게 처리하기 위해 보관될 수 있어요.</small><button onclick="closePopup()">확인했어요</button></div>`)}
+function showAiPolicy(){popup(`<div class="ai-policy"><span>Re:Tone AI 안내 · 2026.11</span><h2>내 대화를 돕기 위한 AI 사용</h2><p><b>왜 개입하나요?</b><br>강한 욕설·위협 표현, 오해될 수 있는 말투, 출처 확인이 중요한 주장을 알리기 위해서예요.</p><p><b>무엇을 보내나요?</b><br>보내려는 메시지와 같은 채팅방의 최근 메시지 최대 6개(화자 포함)를 필요한 경우 OpenAI API로 보내 점검해요. 부적절한 표현이 발견되면 같은 대화를 참고해 바로 수정안을 만들어요. 다른 채팅방 내용이나 계정의 전화번호·비밀번호·프로필은 별도로 보내지 않아요.</p><p><b>무엇을 하지 않나요?</b><br>AI가 대신 전송하거나 경고만으로 메시지를 막지 않아요. 최종 전송은 항상 내가 선택해요.</p><small>AI 점검 결과는 같은 문장을 빠르게 처리하기 위해 보관될 수 있어요.</small><button onclick="closePopup()">확인했어요</button></div>`)}
 function settings(){nav='settings';const avatar=localStorage.getItem('retone-avatar');app.innerHTML=`<main class="layout">${rail()}<section class="page"><header class="head"><h1>설정</h1></header><div class="content"><div class="intro"><h2>${esc(signedIn)}님</h2><p>프로필과 앱 사용 환경을 관리해요.</p></div><div class="rooms"><label class="room"><span class="avatar" id="avatarPreview">${avatar?`<img src="${avatar}">`:esc(signedIn[0])}</span><span class="copy"><b>프로필 사진 바꾸기</b><span>사진을 선택하면 이 기기에서 바로 적용돼요.</span></span><input hidden type="file" accept="image/*" onchange="setAvatar(this)"></label><section class="ai-preferences"><b>AI 대화 도움</b><p>강한 표현과 확인이 필요한 정보에 대해 제안을 보여줘요.</p><button class="ai-policy-link" onclick="showAiPolicy()">AI 사용 안내 보기</button></section><button class="room" onclick="logout()"><span class="avatar">↪</span><span class="copy"><b>로그아웃</b><span>이 기기에서 안전하게 로그아웃해요.</span></span></button></div></div></section></main>`}
 function authForm(mode){const join=mode==='signup';document.querySelectorAll('.auth-tabs button').forEach((b,i)=>b.classList.toggle('selected',(i===1)===join));document.querySelector('#auth-form').innerHTML=`<label>이름<input id="auth-name" placeholder="이름을 입력하세요"></label><label>전화번호<input id="auth-phone" inputmode="numeric" placeholder="전화번호를 입력하세요"></label><label>비밀번호<input id="auth-password" type="password" placeholder="비밀번호를 입력하세요"></label>${join?'<button type="button" class="ai-policy-link" onclick="showAiPolicy()">AI가 개입하는 이유와 사용 범위 보기</button><label class="consent"><input id="auth-ai-consent" type="checkbox"> AI 사용 안내를 읽었고, AI 대화 도움 사용에 동의해요.</label>':''}<button class="auth-submit" onclick="finishAuth('${mode}')">${join?'회원가입하고 시작하기':'로그인'}</button>${join?'<p class="auth-hint">같은 전화번호가 있으면 확인 절차가 안내돼요.</p>':''}`}
 async function finishAuth(mode){const name=document.querySelector('#auth-name').value.trim(),phone=document.querySelector('#auth-phone').value.replace(/\D/g,''),password=document.querySelector('#auth-password').value,consent=document.querySelector('#auth-ai-consent')?.checked;if(!name||!phone||password.length<6)return alert('이름, 전화번호와 6자 이상 비밀번호를 입력해 주세요.');if(mode==='signup'&&!consent)return alert('AI 사용 안내를 확인하고 동의해 주세요.');try{const user=await api('/api/auth/'+(mode==='signup'?'signup':'login'),{method:'POST',body:JSON.stringify({name,phone,password,ai_intervention:'standard'})});signedIn=user.name;signedInId=user.id;aiIntervention='standard';sessionStorage.setItem('retone-v2-name',user.name);sessionStorage.setItem('retone-v2-user-id',user.id);sessionStorage.setItem('retone-v2-ai-level','standard');if(consent)sessionStorage.setItem('retone-v2-ai-consent','yes');home()}catch{alert(mode==='signup'?'이미 가입된 전화번호이거나 입력값을 확인해 주세요.':'이름, 전화번호 또는 비밀번호를 다시 확인해 주세요.')}}
@@ -274,9 +274,8 @@ async function setAvatar(input){const file=input.files?.[0];if(!file||!signedInI
 function saveStatusMessage(){const input=document.querySelector('#status-message'),status=(input?.value||'').trim().slice(0,60);if(status)localStorage.setItem(statusStorageKey(),status);else localStorage.removeItem(statusStorageKey());settings()}
 async function settings(){nav='settings';try{await loadUserAvatars()}catch{}const avatar=userAvatarByName[signedIn]||localStorage.getItem(avatarStorageKey());const status=localStorage.getItem(statusStorageKey())||'';app.innerHTML=`<main class="layout android-layout">${rail()}<section class="page"><header class="head"><h1>설정</h1></header><div class="content"><div class="intro"><h2>${esc(signedIn)}님</h2><p>프로필과 앱 사용 환경을 관리해요.</p></div><div class="rooms"><label class="room"><span class="avatar">${avatarMarkup(signedIn,avatar)}</span><span class="copy"><b>프로필 사진 바꾸기</b><span>이 계정의 친구·채팅 화면에 표시돼요.</span></span><input hidden type="file" accept="image/*" onchange="setAvatar(this)"></label><section class="profile-status"><b>상태메시지</b><p>친구에게 보여줄 짧은 한마디를 적어 보세요.</p><div><input id="status-message" maxlength="60" value="${proposalInputValue(status)}" placeholder="예: 오늘은 답장이 조금 늦어요"><button onclick="saveStatusMessage()">저장</button></div></section><button class="room" onclick="showAiPolicy()"><span class="avatar">✦</span><span class="copy"><b>AI 사용 안내</b><span>대화 도움의 사용 범위를 확인해요.</span></span></button><button class="room danger" onclick="deleteMyAccount()"><span class="avatar">−</span><span class="copy"><b>회원탈퇴</b><span>이 앱의 계정과 데모 데이터를 삭제해요.</span></span></button><button class="room" onclick="logout()"><span class="avatar">↪</span><span class="copy"><b>로그아웃</b><span>이 기기에서 안전하게 로그아웃해요.</span></span></button></div></div></section>${androidNav()}</main>`}
 async function deleteMyAccount(){if(!signedInId||!confirm('정말 회원탈퇴할까요? 데모 모드에서는 복구할 수 없어요.'))return;await api(`/api/users/${signedInId}`,{method:'DELETE'});localStorage.removeItem(avatarStorageKey());localStorage.removeItem(statusStorageKey());localStorage.removeItem('retone-avatar');logout()}
-// The typing preview is intentionally based on the text being typed only.  Passing
-// the whole conversation to this lightweight safety check let the model describe a
-// previous speaker's message as if it were the sender's current message.
+// Older clients used a text-only preview. The final definitions below bind each
+// preview to its room snapshot and sender before a result can be reused.
 async function runAiCheck(text){
   if(aiPrefetch.text!==text)return null;
   setAiStatus('AI 확인 중',true);
@@ -314,6 +313,20 @@ function showSendReview(html){
   modal.onclick=event=>{if(event.target===modal)editPendingSend()};
   modal.onkeydown=event=>{if(event.key==='Escape')editPendingSend()};
 }
+function applyPendingSuggestion(){
+  const original=pendingSend,suggestion=original?.result?.suggestion?.trim();
+  if(!original||!suggestion)return;
+  pendingSend=null;
+  original.modal?.remove();
+  if(!isCurrentSendView(original))return;
+  removePendingBubble();
+  const input=document.querySelector('#text');
+  input.disabled=false;
+  input.placeholder='메시지를 입력하세요';
+  input.value=suggestion.replace(/\s*[\r\n]+\s*/g,' ');
+  handleChatInput(input.value);
+  input.focus();
+}
 function showCheckResult(result){
   if(!pendingSend)return;
   pendingSend.result=result;
@@ -326,7 +339,10 @@ function showCheckResult(result){
   if(result.verdict==='WARN'){
 
     removePendingBubble();
-    showSendReview(`<div class="ai-check warn"><h2>표현을 다시 볼까요?</h2><p>${esc(result.suggestion||'이 표현은 상대에게 공격적이거나 위협적으로 들릴 수 있어요. 표현을 다듬거나 그대로 보낼 수 있어요.')}</p><div class="modal-actions"><button class="quiet" onclick="rewritePending()">말 고치기</button><button onclick="sendApproved()">이대로 보내기</button></div></div>`);
+    const suggestion=result.suggestion?.trim();
+    showSendReview(suggestion
+      ? `<div class="ai-check warn"><h2>이렇게 바꿔볼까요?</h2><p class="ai-suggestion">${esc(suggestion)}</p><div class="modal-actions"><button class="quiet" onclick="editPendingSend()">직접 고치기</button><button onclick="applyPendingSuggestion()">수정안 사용</button></div><button class="send-original" onclick="sendApproved()">원문 그대로 보내기</button></div>`
+      : `<div class="ai-check warn"><h2>표현을 다시 볼까요?</h2><p>상대에게 공격적이거나 위협적으로 들릴 수 있어요.</p><div class="modal-actions"><button class="quiet" onclick="editPendingSend()">직접 고치기</button><button onclick="sendApproved()">원문 그대로 보내기</button></div></div>`);
     return;
   }
   if(info.level==='check'){
@@ -359,17 +375,56 @@ async function send(event){
     showCheckResult({error:'AI_CHECK_UNAVAILABLE',source:'unavailable'});
   }
 }
-// Old preview results were made while the conversation was included in the
-// request. Never reuse them after switching to current-message-only checks.
-function aiResultKeyV4(text){return `v5|${aiIntervention}|${String(text||'').trim().toLowerCase()}`}
-function savedAiResult(text){return aiSavedResults[aiResultKeyV4(text)]||null}
-function rememberAiResult(text,result){
+// A preview belongs to one sender and one six-message room snapshot. A reply in
+// the room changes the key, so a previous speaker's result cannot carry forward.
+function aiContextKey(){
+  return JSON.stringify([roomId,signedIn,roomMessages.slice(-6).map(message=>message.id||[message.sender,message.body])]);
+}
+function aiResultKeyV4(text,contextKey=aiContextKey()){return `v6|${aiIntervention}|${contextKey}|${String(text||'').trim().toLowerCase()}`}
+function savedAiResult(text,contextKey=aiContextKey()){return aiSavedResults[aiResultKeyV4(text,contextKey)]||null}
+function rememberAiResult(text,result,contextKey=aiContextKey()){
   if(!result || result.error || ["unavailable","fallback"].includes(result.source))return;
-  const key=aiResultKeyV4(text);
+  const key=aiResultKeyV4(text,contextKey);
   aiSavedResults[key]={...result,source:'saved'};
   const keys=Object.keys(aiSavedResults);
   if(keys.length>180)keys.slice(0,keys.length-180).forEach(key=>delete aiSavedResults[key]);
   try{localStorage.setItem('retone-ai-results-v1',JSON.stringify(aiSavedResults))}catch{}
+}
+function queueAiCheck(value){
+  const text=value.trim(),key=aiContextKey();
+  clearTimeout(aiPrefetch.timer);
+  if(aiIntervention==='off'||!text){aiPrefetch={text:'',key:'',result:null,promise:null,timer:null};setAiStatus('');return}
+  const saved=savedAiResult(text,key);
+  if(saved){aiPrefetch={text,key,result:saved,promise:null,timer:null};setAiStatus('AI 확인 완료');return}
+  if(aiPrefetch.text===text&&aiPrefetch.key===key&&(aiPrefetch.result||aiPrefetch.promise))return;
+  aiPrefetch={text,key,result:null,promise:null,timer:setTimeout(()=>runAiCheck(text,key),120)};
+  setAiStatus('AI 확인 준비 중',true);
+}
+async function runAiCheck(text,key=aiContextKey()){
+  if(aiPrefetch.text!==text||aiPrefetch.key!==key)return null;
+  setAiStatus('AI 확인 중',true);
+  const request=api('/api/ai/check',{method:'POST',body:JSON.stringify({text,context:messageContext(),ai_intervention:aiIntervention,sender:signedIn})});
+  aiPrefetch.promise=request;
+  try{
+    const result=await request;
+    if(aiPrefetch.text===text&&aiPrefetch.key===key){
+      aiPrefetch.result=result;aiPrefetch.promise=null;rememberAiResult(text,result,key);setAiStatus('AI 확인 완료');
+    }
+    return result;
+  }catch{
+    if(aiPrefetch.text===text&&aiPrefetch.key===key){aiPrefetch.promise=null;setAiStatus('')}
+    return null;
+  }
+}
+async function checkForSend(body){
+  if(aiIntervention==='off')return {verdict:'PASS',info:{level:'none'}};
+  const key=aiContextKey(),saved=savedAiResult(body,key);
+  if(saved)return saved;
+  if(aiPrefetch.text===body&&aiPrefetch.key===key&&aiPrefetch.result)return aiPrefetch.result;
+  if(aiPrefetch.text===body&&aiPrefetch.key===key&&aiPrefetch.promise)return (await aiPrefetch.promise)||{verdict:'PASS',source:'unavailable',error:'AI_CHECK_UNAVAILABLE'};
+  clearTimeout(aiPrefetch.timer);
+  aiPrefetch={text:body,key,result:null,promise:null,timer:null};
+  return (await runAiCheck(body,key))||{verdict:'PASS',source:'unavailable',error:'AI_CHECK_UNAVAILABLE'};
 }
 let userProfilesById={},userProfilesByName={};
 async function loadUserAvatars(){
@@ -533,7 +588,7 @@ async function openRoom(id) {
   roomMessages = messages.slice();
   feed.applied = request;
   const title=roomDisplayName(room),names=roomPeople(room).join(', '),profile=userProfilesByName[title],titleMarkup=profile?`<button class="chat-profile-trigger" onclick="showUserProfile('${profile.id}')"><h1>${esc(title)}</h1><span>${esc(names)} · ${room.members}명</span></button>`:`<div class="room-title"><h1>${esc(title)}</h1><span>${esc(names)} · ${room.members}명</span></div>`;
-  app.innerHTML=`<main class="layout android-layout">${rail()}<section class="chat"><header class="head chat-head"><button class="back" onclick="home()">‹</button>${titleMarkup}<div class="chat-actions"><button onclick="inviteFriends()">＋ 초대</button><button onclick="newAgreement()">✓</button><button class="room-more" aria-label="채팅방 메뉴" onclick="roomMenu()">⋯</button></div></header><div class="room-notice-host" id="room-schedule-notice">${roomScheduleNotice(id)}</div><section class="messages" id="messages" data-room-id="${esc(id)}">${messages.map(view).join('')}</section><form class="sendbar" onsubmit="send(event)"><input id="text" placeholder="메시지를 입력하세요" autocomplete="off" oninput="handleChatInput(this.value)"><span id="ai-status" class="ai-status"></span><button type="button" class="rewrite-draft" data-rewrite-draft onclick="rewriteDraft()" disabled>말 고치기</button><button type="submit" aria-label="보내기">↑</button></form></section></main>`;
+  app.innerHTML=`<main class="layout android-layout">${rail()}<section class="chat"><header class="head chat-head"><button class="back" onclick="home()">‹</button>${titleMarkup}<div class="chat-actions"><button onclick="inviteFriends()">＋ 초대</button><button onclick="newAgreement()">✓</button><button class="room-more" aria-label="채팅방 메뉴" onclick="roomMenu()">⋯</button></div></header><div class="room-notice-host" id="room-schedule-notice">${roomScheduleNotice(id)}</div><section class="messages" id="messages" data-room-id="${esc(id)}">${messages.map(view).join('')}</section><form class="sendbar" onsubmit="send(event)"><input id="text" placeholder="메시지를 입력하세요" autocomplete="off" oninput="handleChatInput(this.value)"><span id="ai-status" class="ai-status"></span><button type="submit" aria-label="보내기">↑</button></form></section></main>`;
   feed.list = document.querySelector('#messages');
   feed.list.scrollTop = feed.list.scrollHeight;
   document.querySelector('#text')?.focus();

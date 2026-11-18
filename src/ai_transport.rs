@@ -41,8 +41,9 @@ pub async fn structured_response(model: &str, input: &str, instructions: Option<
     serde_json::from_str(&text).ok()
 }
 pub fn check_schema() -> Value {
-    json!({"type":"object","additionalProperties":false,"required":["verdict","suggestion","info"],"properties":{
+    json!({"type":"object","additionalProperties":false,"required":["verdict","trigger","suggestion","info"],"properties":{
         "verdict":{"type":"string","enum":["PASS","WARN"]},"suggestion":{"type":["string","null"]},
+        "trigger":{"type":["string","null"]},
         "info":{"type":"object","additionalProperties":false,"required":["level","note","queries"],"properties":{
             "level":{"type":"string","enum":["none","check"]},"note":{"type":["string","null"]},"queries":{"type":"array","items":{"type":"string"}}
         }}

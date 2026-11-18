@@ -409,6 +409,12 @@ async fn delete_account(State(app): State<App>, Path(id): Path<Uuid>) -> StatusC
         StatusCode::NO_CONTENT
     }
 }
+fn warns_about_current_message(text: &str, result: &serde_json::Value) -> bool {
+    result["verdict"] == "WARN"
+        && result["trigger"].as_str().is_some_and(|trigger| !trigger.trim().is_empty() && text.contains(trigger))
+        && result["suggestion"].as_str().is_some_and(|suggestion| !suggestion.trim().is_empty())
+}
+
 async fn ai_check(State(app): State<App>, Json(input): Json<AiCheck>) -> Json<serde_json::Value> {
     let text = input.text.trim();
     let normalized = text
@@ -515,38 +521,45 @@ async fn ai_check(State(app): State<App>, Json(input): Json<AiCheck>) -> Json<se
     }
     let attack = ai_rules::strong_expression(text).map(|term| (term, "dictionary"))
         .or_else(|| if level != "light" { ai_rules::hostility(text).map(|term| (term, "rules")) } else { None });
-    if let Some((matched, source)) = attack {
-        return Json(serde_json::json!({"verdict":"WARN","suggestion":format!("‘{matched}’ 표현은 상대에게 공격적으로 들릴 수 있어요. 감정이나 원하는 행동을 구체적으로 말해볼까요?"),"info":{"level":"none","note":null,"queries":[]},"source":source}));
-    }
-    if level == "light" {
+    if level == "light" && attack.is_none() {
         return Json(
             serde_json::json!({"verdict":"PASS","suggestion":null,"info":{"level":"none","note":null,"queries":[]},"source":"light"}),
         );
     }
     let hash = format!(
         "{:x}",
-        Sha256::digest(format!("v6:{level}:{text}:{sender}:{context}").as_bytes())
+        Sha256::digest(format!("v7:{level}:{text}:{sender}:{context}").as_bytes())
     );
     if let Some(db) = &app.db {
         if let Ok(Some((verdict,suggestion,info_level,info_note,info_queries)))=sqlx::query_as::<_,(String,Option<String>,String,Option<String>,Vec<String>)>("SELECT verdict,suggestion,info_level,info_note,info_queries FROM retone_v2.ai_cache WHERE message_hash=$1").bind(&hash).fetch_optional(db).await{return Json(serde_json::json!({"verdict":verdict,"suggestion":suggestion,"info":{"level":info_level,"note":info_note,"queries":info_queries},"source":"cache"}));}
     }
     let Some(_key) = env::var("OPENAI_API_KEY").ok() else {
+        if let Some((matched, source)) = attack {
+            return Json(serde_json::json!({"verdict":"WARN","trigger":matched,"suggestion":null,"info":{"level":"none","note":null,"queries":[]},"source":source}));
+        }
         return Json(
             serde_json::json!({"verdict":"PASS","suggestion":null,"info":{"level":"none","note":null,"queries":[]},"source":"unavailable","error":"AI_CHECK_UNAVAILABLE"}),
         );
     };
+    let local_trigger = attack.map(|(matched, _)| matched).unwrap_or("없음");
     let prompt = format!(
-        "너는 Re:Tone의 대화 거울이다. 판정자·검열자·사실확인 기관이 아니다. 현재 문장을 오직 '이렇게 들릴 수도 있어요'라는 제안으로만 비춘다.\n현재 문장은 반드시 '{sender}'가 작성했다. 최근 대화는 화자 이름과 함께 주어지며, 이름을 바꾸거나 상대가 하지 않은 행동을 만들지 마라.\n1) 심한 욕설·위협·명백한 조롱뿐 아니라, 비꼼·냉소·돌려 말하는 압박·상대를 작게 만드는 표현도 알아차린다. 친한 사이의 가벼운 농담은 WARN하지 않는다.\n2) WARN일 때 suggestion은 반드시 이 문장에 맞춰 두 문장으로 쓴다. 첫 문장은 실제 문제 지점(단어·어조·비꼼)을 따옴표로 구체적으로 짚고 왜 상대가 압박·비난·조롱으로 느낄 수 있는지 설명한다. 둘째 문장은 원래 의도를 살린 짧은 대체 표현을 제안한다. 최근 대화 맥락이 있다면 갈등의 원인과 사용자의 바람을 살리되, 맥락에 없는 사실을 만들지 마라.\n3) 정보 점검: 건강·안전·법·돈·정치·재난·통계·속보성 주장에 검증 가능한 출처·날짜·원문이 빠졌다면 info.level=check. 앞선 대화에 인터넷 글·댓글·전언이 나와도 검증 가능한 출처로 취급하지 않는다. 약의 효능, 투자 수익, 계약의 효력, 대피 명령처럼 행동에 영향을 주는 단정은 빠뜨리지 않는다. 진실·거짓을 판단하지 말고 출처와 날짜 확인을 제안한다. WARN은 상대방을 공격하거나 위협하는 말에만 쓴다. 출처가 불확실한 정보 자체는 WARN 사유가 아니다.\n4) 현재 개입 강도는 {level}이다. standard는 뚜렷한 경우만, careful은 비꼼·오해 가능성까지 조금 더 꼼꼼히 본다.\n5) JSON만 출력: {{\"verdict\":\"PASS|WARN\",\"suggestion\":string|null,\"info\":{{\"level\":\"none|check\",\"note\":string|null,\"queries\":[string]}}}}. queries는 확인할 검색어 0~2개.\n최근 대화(없으면 무시):\n{context}\n현재 문장({sender} 작성): {text}"
+        "너는 Re:Tone의 전송 전 문장 편집자다. 지금 검사할 대상은 오직 '{sender}'가 작성한 현재 문장 하나다. 최근 대화는 뜻과 화자를 이해하는 참고 자료일 뿐이다. 최근 대화 속 다른 사람의 욕설·공격 때문에 현재 문장을 WARN하면 안 된다.\n1) 현재 문장 자체에 심한 욕설·위협·조롱·비꼼·압박이 있을 때만 WARN한다. 친한 사이의 가벼운 농담은 PASS한다. 서버가 현재 문장에서 찾은 표현은 '{local_trigger}'이다. '없음'이 아니면 WARN한다.\n2) WARN이면 trigger에 현재 문장에 실제로 연속해서 들어 있는 문제 표현을 그대로 짧게 복사한다. trigger를 현재 문장에서 정확히 복사할 수 없다면 PASS한다. PASS이면 trigger와 suggestion은 null이다.\n3) WARN의 suggestion은 설명이나 따옴표 없이 사용자가 바로 보낼 수 있는 다듬은 문장 하나다. 질문은 같은 정보를 묻는 질문으로, 요청·거절·유보는 같은 의도로 유지한다. 날짜·시각·수량·장소·담당자와 원문의 존댓말·반말을 보존한다. 맥락에 없는 사과·이유·감정·약속을 만들지 않는다. 공격적인 부분만 부드럽게 바꾼다.\n4) 건강·안전·법·돈·정치·재난·통계·속보성 주장에 출처·날짜·원문이 빠졌다면 info.level=check로 둔다. 사실 여부를 판정하지 않는다. 정보 확인만 필요한 문장은 PASS다.\n5) 현재 개입 강도는 {level}이다. standard는 뚜렷한 경우만, careful은 비꼼·오해 가능성까지 본다.\nJSON만 출력: {{\"verdict\":\"PASS|WARN\",\"trigger\":string|null,\"suggestion\":string|null,\"info\":{{\"level\":\"none|check\",\"note\":string|null,\"queries\":[string]}}}}.\n최근 대화(참고만 함):\n{context}\n현재 문장({sender} 작성): {text}"
     );
     let parsed = match ai_transport::json_response(&prompt, ai_transport::check_schema(), 700).await {
         Some(value) if matches!(value["verdict"].as_str(), Some("PASS" | "WARN")) => value,
-        _ => return Json(serde_json::json!({"verdict":"PASS","suggestion":null,"info":{"level":"none","note":null,"queries":[]},"source":"unavailable","error":"AI_CHECK_UNAVAILABLE"})),
+        _ => {
+            if let Some((matched, source)) = attack {
+                return Json(serde_json::json!({"verdict":"WARN","trigger":matched,"suggestion":null,"info":{"level":"none","note":null,"queries":[]},"source":source}));
+            }
+            return Json(serde_json::json!({"verdict":"PASS","suggestion":null,"info":{"level":"none","note":null,"queries":[]},"source":"unavailable","error":"AI_CHECK_UNAVAILABLE"}));
+        }
     };
     // Factual claims can be returned as WARN by the model even though there is
     // no person-directed attack. Keep the intervention as a source check.
     let source_check = ai_rules::unverified_sensitive_claim(text);
-    let verdict = if source_check { "PASS" } else { parsed["verdict"].as_str().unwrap_or("PASS") };
-    let suggestion = if source_check { None } else { parsed["suggestion"].as_str() };
+    let model_warn = warns_about_current_message(text, &parsed);
+    let verdict = if source_check { "PASS" } else if attack.is_some() || model_warn { "WARN" } else { "PASS" };
+    let suggestion = if verdict == "WARN" { parsed["suggestion"].as_str().filter(|value| !value.trim().is_empty()) } else { None };
     let info_level = if source_check { "check" } else { parsed["info"]["level"].as_str().unwrap_or("none") };
     let info_note = parsed["info"]["note"].as_str().or(if source_check { Some("출처와 발표 날짜를 확인해 주세요.") } else { None });
     let info_queries = parsed["info"]["queries"]
@@ -565,6 +578,22 @@ async fn ai_check(State(app): State<App>, Json(input): Json<AiCheck>) -> Json<se
     Json(
         serde_json::json!({"verdict":verdict,"suggestion":suggestion,"info":{"level":info_level,"note":info_note,"queries":info_queries},"source":"ai"}),
     )
+}
+
+#[cfg(test)]
+mod ai_check_tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn a_warning_must_quote_the_message_currently_being_sent() {
+        let stale = json!({"verdict":"WARN","trigger":"병신","suggestion":"다음부터 조심해 줘."});
+        assert!(!warns_about_current_message("알겠어. 다음부터 조심해 줘.", &stale));
+        let current = json!({"verdict":"WARN","trigger":"병신","suggestion":"그렇게 말하면 속상해."});
+        assert!(warns_about_current_message("너 진짜 병신이냐?", &current));
+        let missing_edit = json!({"verdict":"WARN","trigger":"병신","suggestion":null});
+        assert!(!warns_about_current_message("너 진짜 병신이냐?", &missing_edit));
+    }
 }
 
 async fn ai_schedule(Json(input): Json<ScheduleCheck>) -> Json<serde_json::Value> {

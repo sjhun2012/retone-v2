@@ -15,6 +15,8 @@ vm.runInContext(`
   showCheckResult({verdict:'WARN',suggestion:'<script>警告</script>'});
 `,context);
 assert.match(vm.runInContext('rendered',context),/&lt;script&gt;/);
+assert.match(vm.runInContext('rendered',context),/수정안 사용/);
+assert.doesNotMatch(vm.runInContext('rendered',context),/말 고치기/);
 vm.runInContext(`rendered=''; showCheckResult({verdict:'PASS',source:'unavailable'});`,context);
 assert.match(vm.runInContext('rendered',context),/AI 점검을 완료하지 못했어요/);
 assert.equal(vm.runInContext('sent',context),0);
@@ -27,15 +29,20 @@ vm.runInContext(`rememberAiResult('bad-json',{verdict:'PASS',error:'AI_CHECK_UNA
 assert.equal(vm.runInContext("savedAiResult('bad-json')",context),null);
 vm.runInContext(`rememberAiResult('hello',{verdict:'PASS',source:'ai'});`,context);
 assert.equal(vm.runInContext("savedAiResult('hello').verdict",context),'PASS');
-assert.match(vm.runInContext("aiResultKeyV4('hello')",context),/^v5\|/);
+assert.match(vm.runInContext("aiResultKeyV4('hello')",context),/^v6\|/);
 vm.runInContext(`
   roomMessages=[{sender:'친구',body:'어제 많이 기다렸어.'},{sender:'나',body:'미안해.'}];
   signedIn='나'; aiIntervention='careful';
   rememberAiResult('오늘은 5시에 볼까?',{verdict:'WARN',source:'ai'});
-  api=async (_url,options)=>{globalThis.sentCheck=JSON.parse(options.body);return {verdict:'PASS',info:{level:'none'}}};
+  globalThis.checkCalls=0;
+  api=async (_url,options)=>{globalThis.checkCalls++;globalThis.sentCheck=JSON.parse(options.body);return {verdict:'PASS',info:{level:'none'}}};
 `,context);
+assert.equal((await vm.runInContext("checkForSend('오늘은 5시에 볼까?')",context)).verdict,'WARN');
+assert.equal(vm.runInContext('checkCalls',context),0);
+vm.runInContext(`roomMessages.push({id:'new',sender:'친구',body:'장소는 역 앞이야.'});`,context);
 assert.equal((await vm.runInContext("checkForSend('오늘은 5시에 볼까?')",context)).verdict,'PASS');
+assert.equal(vm.runInContext('checkCalls',context),1);
 assert.equal(vm.runInContext('sentCheck.sender',context),'나');
-assert.equal(vm.runInContext('sentCheck.context.length',context),2);
+assert.equal(vm.runInContext('sentCheck.context.length',context),3);
 assert.equal(vm.runInContext('sentCheck.context[0]',context),'친구: 어제 많이 기다렸어.');
 console.log('Frontend: escaped warning, unavailable choice, failed-cache exclusion, versioned cache, contextual send passed');
