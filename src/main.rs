@@ -545,7 +545,7 @@ async fn ai_check(State(app): State<App>, Json(input): Json<AiCheck>) -> Json<se
     let prompt = format!(
         "너는 Re:Tone의 전송 전 문장 편집자다. 지금 검사할 대상은 오직 '{sender}'가 작성한 현재 문장 하나다. 최근 대화는 뜻과 화자를 이해하는 참고 자료일 뿐이다. 최근 대화 속 다른 사람의 욕설·공격 때문에 현재 문장을 WARN하면 안 된다.\n1) 현재 문장 자체에 심한 욕설·위협·조롱·비꼼·압박이 있을 때만 WARN한다. 친한 사이의 가벼운 농담은 PASS한다. 서버가 현재 문장에서 찾은 표현은 '{local_trigger}'이다. '없음'이 아니면 WARN한다.\n2) WARN이면 trigger에 현재 문장에 실제로 연속해서 들어 있는 문제 표현을 그대로 짧게 복사한다. trigger를 현재 문장에서 정확히 복사할 수 없다면 PASS한다. PASS이면 trigger와 suggestion은 null이다.\n3) WARN의 suggestion은 설명이나 따옴표 없이 사용자가 바로 보낼 수 있는 다듬은 문장 하나다. 질문은 같은 정보를 묻는 질문으로, 요청·거절·유보는 같은 의도로 유지한다. 날짜·시각·수량·장소·담당자와 원문의 존댓말·반말을 보존한다. 맥락에 없는 사과·이유·감정·약속을 만들지 않는다. 공격적인 부분만 부드럽게 바꾼다.\n4) 건강·안전·법·돈·정치·재난·통계·속보성 주장에 출처·날짜·원문이 빠졌다면 info.level=check로 둔다. 사실 여부를 판정하지 않는다. 정보 확인만 필요한 문장은 PASS다.\n5) 현재 개입 강도는 {level}이다. standard는 뚜렷한 경우만, careful은 비꼼·오해 가능성까지 본다.\nJSON만 출력: {{\"verdict\":\"PASS|WARN\",\"trigger\":string|null,\"suggestion\":string|null,\"info\":{{\"level\":\"none|check\",\"note\":string|null,\"queries\":[string]}}}}.\n최근 대화(참고만 함):\n{context}\n현재 문장({sender} 작성): {text}"
     );
-    let parsed = match ai_transport::json_response(&prompt, ai_transport::check_schema(), 700).await {
+    let parsed = match ai_transport::structured_response("gpt-4.1-mini", &prompt, None, ai_transport::check_schema(), 700).await {
         Some(value) if matches!(value["verdict"].as_str(), Some("PASS" | "WARN")) => value,
         _ => {
             if let Some((matched, source)) = attack {
