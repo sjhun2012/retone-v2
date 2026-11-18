@@ -129,3 +129,73 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline-color:
   .bubble.mine { padding-right: 35px; }
   .bubble.mine .delete-message { width: 26px; height: 26px; }
 }
+
+.message-body { white-space: pre-wrap; overflow-wrap: anywhere; }
+.reply-quote {
+  display: grid;
+  gap: 2px;
+  margin: 0 0 8px;
+  padding: 7px 9px;
+  border-left: 3px solid #9b86b7;
+  border-radius: 7px;
+  background: #fff8;
+  font-size: 12px;
+}
+.reply-quote b { color: #68527f; }
+.reply-quote span { overflow: hidden; color: #746d7d; white-space: nowrap; text-overflow: ellipsis; }
+.message-tools { display: flex; flex-wrap: wrap; align-items: center; gap: 5px; min-height: 20px; margin: 6px 0 -5px; }
+.message-tools > button {
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 22px;
+  padding: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: #756c7f;
+  font-size: 15px;
+  line-height: 1;
+}
+.message-tools > button:hover { background: #ece7f1; color: #59466f; }
+.source-toggle { font-size: 18px !important; }
+.source-toggle { order: 0; }
+.reply-message { order: 1; }
+.source-panel {
+  order: 2;
+  flex: 1 0 100%;
+  width: min(330px, 66vw);
+  margin: 8px 0 2px;
+  padding: 11px 0 3px;
+  border-top: 1px solid #ddd5e5;
+  color: #50495a;
+  font-size: 12px;
+  line-height: 1.55;
+}
+.source-panel[hidden] { display: none; }
+.source-panel b { display: block; margin-bottom: 5px; color: #42384f; }
+.source-panel p { margin: 0 0 8px; white-space: pre-wrap; }
+.source-links { display: grid; gap: 5px; }
+.source-links a { color: #654c84; text-decoration: underline; text-underline-offset: 2px; overflow-wrap: anywhere; }
+.sendbar { flex-wrap: wrap; }
+.reply-compose {
+  display: flex;
+  flex: 1 0 100%;
+  align-items: center;
+  justify-content: space-between;
+  min-width: 0;
+  padding: 8px 10px;
+  border-left: 3px solid #9278ad;
+  border-radius: 8px;
+  background: #f6f2f8;
+}
+.reply-compose[hidden] { display: none; }
+.reply-compose span { min-width: 0; }
+.reply-compose b, .reply-compose small { display: block; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.reply-compose b { color: #574468; font-size: 12px; }
+.reply-compose small { margin-top: 2px; color: var(--muted); font-size: 11px; }
+.sendbar .reply-compose button { width: 28px; height: 28px; margin-left: 8px; border-radius: 9px; background: transparent; color: #71667c; font-size: 18px; }
+
+@media (max-width: 700px) {
+  .source-panel { width: min(280px, 68vw); }
+  .message-tools { margin-bottom: -6px; }
+}

@@ -1,4 +1,4 @@
-const app=document.querySelector('#app');let data=null,roomId=null,nav='chat';let signedIn=sessionStorage.getItem('retone-v2-name')||'';let signedInId=sessionStorage.getItem('retone-v2-user-id')||'';let aiIntervention=sessionStorage.getItem('retone-v2-ai-level')||'standard';let pendingSend=null;let aiPrefetch={text:'',result:null,promise:null,timer:null};let aiSavedResults=(()=>{try{return JSON.parse(localStorage.getItem('retone-ai-results-v1')||'{}')}catch{return {}}})();const esc=s=>String(s||'').replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));const avatarMarkup=(name)=>esc(String(name||'?').trim().charAt(0)||'?');const aiCacheKey=text=>`v3|${aiIntervention}|${text.trim().toLowerCase()}`;function savedAiResult(text){return aiSavedResults[aiCacheKey(text)]||null}function rememberAiResult(text,result){const key=aiCacheKey(text);aiSavedResults[key]={...result,source:'saved'};const keys=Object.keys(aiSavedResults);if(keys.length>180)keys.slice(0,keys.length-180).forEach(k=>delete aiSavedResults[k]);try{localStorage.setItem('retone-ai-results-v1',JSON.stringify(aiSavedResults))}catch{}}
+const app=document.querySelector('#app');let data=null,roomId=null,nav='chat';let signedIn=sessionStorage.getItem('retone-v2-name')||'';let signedInId=sessionStorage.getItem('retone-v2-user-id')||'';let aiIntervention=sessionStorage.getItem('retone-v2-ai-level')||'standard';let pendingSend=null,pendingReply=null;let aiPrefetch={text:'',result:null,promise:null,timer:null};let aiSavedResults=(()=>{try{return JSON.parse(localStorage.getItem('retone-ai-results-v1')||'{}')}catch{return {}}})();const esc=s=>String(s||'').replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));const avatarMarkup=(name)=>esc(String(name||'?').trim().charAt(0)||'?');const aiCacheKey=text=>`v3|${aiIntervention}|${text.trim().toLowerCase()}`;function savedAiResult(text){return aiSavedResults[aiCacheKey(text)]||null}function rememberAiResult(text,result){const key=aiCacheKey(text);aiSavedResults[key]={...result,source:'saved'};const keys=Object.keys(aiSavedResults);if(keys.length>180)keys.slice(0,keys.length-180).forEach(k=>delete aiSavedResults[k]);try{localStorage.setItem('retone-ai-results-v1',JSON.stringify(aiSavedResults))}catch{}}
 async function api(url,options={}){const r=await fetch(url,{headers:{'Content-Type':'application/json'},...options});if(!r.ok)throw new Error();if(r.status===204)return null;return r.json()}
 function rail(){return `<aside class="rail"><div class="brand">Re:<i>Tone</i></div><p>더 나은 대화를 위한<br>새로운 작업 공간</p><nav><button class="${nav==='chat'?'active':''}" onclick="nav='chat';home()">채팅</button><button class="${nav==='friends'?'active':''}" onclick="nav='friends';friends()">친구</button><button onclick="settings()">설정</button></nav><small>${esc(signedIn||'Re:Tone')} · v2</small></aside>`}
 async function home(){data=await api('/api/bootstrap');roomId=null;const rooms=data.rooms.filter(r=>!['science','friends'].includes(r.id));app.innerHTML=`<main class="layout">${rail()}<section class="page"><header class="head"><h1>채팅</h1><button class="new-room" onclick="newRoom()">＋ 새 대화</button></header><div class="content"><div class="intro"><h2>${esc(signedIn)}님, 반가워요.</h2><p>친구를 초대해 첫 대화를 시작해 보세요.</p></div><div class="dash"><section class="focus"><b>오늘의 공동 확인</b><span>채팅방에서 함께 확인할 일을 만들어 보세요.</span></section><section class="focus schedule"><b>다음 약속 <button onclick="newAppointment()">＋</button></b><span>친구들과 약속을 정하면 여기에 보여요.</span></section></div><div class="rooms">${rooms.length?rooms.map(r=>`<button class="room" onclick="openRoom('${r.id}')"><span class="avatar">${esc(r.name[0])}</span><span class="copy"><b>${r.pinned?'📌 ':''}${esc(r.name)}</b><span>${esc(r.last)}</span></span>${r.unread?`<span class="badge">${r.unread}</span>`:''}</button>`).join(''):`<button class="empty-chat" onclick="newRoom()"><b>아직 대화가 없어요</b><span>친구를 초대하거나 단체 채팅을 만들어 보세요. ＋</span></button>`}</div></div></section></main>`}
@@ -120,6 +120,7 @@ function stopMessageFeed() {
   messageFeed?.events?.close();
   messageFeed = null;
   roomMessages = [];
+  pendingReply = null;
 }
 
 function feedIsCurrent(feed) {
@@ -208,7 +209,8 @@ async function sendApproved(){
   if(!isCurrentSendView(next))return;
   next.modal?.remove();
   setAiStatus('');
-  await sendChatMessage(next.room,next.body);
+  const sourceQuery=next.result?.info?.queries?.find(query=>String(query||'').trim())||null;
+  await sendChatMessage(next.room,next.body,{sourceQuery,replyToId:next.replyToId});
 }
 async function openRoom(id){roomId=id;if(!data)data=await api('/api/bootstrap');const room=data.rooms.find(item=>item.id===id);if(!room)return home();const messages=await api(`/api/rooms/${id}/messages`);roomMessages=messages.slice();await api(`/api/rooms/${id}/read`,{method:'POST',body:JSON.stringify({reader:signedIn})});markMessagesRead(messages);unreadCounts[id]=0;const names=['나',...(room.participant_names||[])].join(', ');app.innerHTML=`<main class="layout android-layout">${rail()}<section class="chat"><header class="head chat-head"><button class="back" onclick="home()">‹</button><div class="room-title"><h1>${esc(room.name)}</h1><span>${esc(names)} · ${room.members}명</span></div><div class="chat-actions"><button onclick="inviteFriends()">＋ 초대</button><button onclick="newAgreement()">✓</button></div></header><section class="messages" id="messages">${messages.map(view).join('')}${chatScheduleCards(id)}${data.agreements.slice(0,1).map(agreement=>`<article class="agreement"><b>✓ 공동 확인 · ${esc(agreement.task)}</b><small>담당 ${esc(agreement.assignee)} · ${esc(agreement.deadline)}</small></article>`).join('')}</section><form class="sendbar" onsubmit="send(event)"><input id="text" placeholder="메시지를 입력하세요" autocomplete="off" oninput="queueAiCheck(this.value)"><span id="ai-status" class="ai-status"></span><button aria-label="보내기">↑</button></form></section></main>`;const list=document.querySelector('#messages');list.scrollTop=list.scrollHeight;document.querySelector('#text')?.focus();updateUnreadUi();startInboxPolling()}
 function handleChatInput(value){
@@ -235,7 +237,7 @@ function offerScheduleOnMessage(view,message,proposal){
   bubble.append(offer);
 }
 
-async function sendChatMessage(room,body){
+async function sendChatMessage(room,body,{sourceQuery=null,replyToId=null}={}){
   const view={room,userId:signedInId,list:document.querySelector('.chat #messages')};
   if(!isCurrentSendView(view))return;
   const input=document.querySelector('#text');
@@ -246,10 +248,11 @@ async function sendChatMessage(room,body){
     ? api('/api/ai/schedule',{method:'POST',body:JSON.stringify({text:body})}).catch(()=>null)
     : Promise.resolve(null);
   try{
-    const message=await api(`/api/rooms/${room}/messages`,{method:'POST',body:JSON.stringify({sender,sender_id:view.userId,body})});
+    const message=await api(`/api/rooms/${room}/messages`,{method:'POST',body:JSON.stringify({sender,sender_id:view.userId,body,source_query:sourceQuery,reply_to_id:replyToId})});
     if(!isCurrentSendView(view))return;
     removePendingBubble();
     displaySentMessage(message);
+    if(pendingReply?.id===replyToId){pendingReply=null;renderPendingReply()}
     void decision.then(proposal=>offerScheduleOnMessage(view,message,proposal));
   }catch{
     if(!isCurrentSendView(view))return;
@@ -358,7 +361,7 @@ async function send(event){
   if(pendingSend)return;
   const input=document.querySelector('#text'),body=input?.value.trim();
   if(!body)return;
-  const next={body,room:roomId,userId:signedInId,list:document.querySelector('.chat #messages')};
+  const next={body,room:roomId,userId:signedInId,list:document.querySelector('.chat #messages'),replyToId:pendingReply?.id||null};
   pendingSend=next;
   input.value='';input.disabled=true;
   updateRewriteButton();
@@ -380,7 +383,7 @@ async function send(event){
 function aiContextKey(){
   return JSON.stringify([roomId,signedIn,roomMessages.slice(-6).map(message=>message.id||[message.sender,message.body])]);
 }
-function aiResultKeyV4(text,contextKey=aiContextKey()){return `v6|${aiIntervention}|${contextKey}|${String(text||'').trim().toLowerCase()}`}
+function aiResultKeyV4(text,contextKey=aiContextKey()){return `v7|${aiIntervention}|${contextKey}|${String(text||'').trim().toLowerCase()}`}
 function savedAiResult(text,contextKey=aiContextKey()){return aiSavedResults[aiResultKeyV4(text,contextKey)]||null}
 function rememberAiResult(text,result,contextKey=aiContextKey()){
   if(!result || result.error || ["unavailable","fallback"].includes(result.source))return;
@@ -443,6 +446,37 @@ function messageTime(created){
   if(Number.isNaN(date.getTime()))return '';
   return new Intl.DateTimeFormat('ko-KR',{hour:'numeric',minute:'2-digit',hour12:true}).format(date);
 }
+function renderPendingReply(){
+  const host=document.querySelector('#reply-compose');
+  if(!host)return;
+  host.hidden=!pendingReply;
+  host.innerHTML=pendingReply?`<span><b>${esc(pendingReply.sender)}에게 답장</b><small>${esc(pendingReply.body)}</small></span><button type="button" aria-label="답장 취소" onclick="cancelReply()">×</button>`:'';
+}
+function startReply(messageId){
+  const message=roomMessages.find(item=>item.id===messageId);
+  if(!message)return;
+  pendingReply={id:message.id,sender:isMyMessage(message)?'나':message.sender,body:message.body};
+  renderPendingReply();
+  document.querySelector('#text')?.focus();
+}
+function cancelReply(){pendingReply=null;renderPendingReply()}
+async function toggleSources(button,messageId){
+  const panel=button.closest('.bubble')?.querySelector('.source-panel');
+  if(!panel)return;
+  if(!panel.hidden){panel.hidden=true;button.textContent='⌄';button.setAttribute('aria-expanded','false');return}
+  panel.hidden=false;button.textContent='⌃';button.setAttribute('aria-expanded','true');
+  if(panel.dataset.loaded)return;
+  panel.textContent='출처를 찾고 있어요…';
+  try{
+    const result=await api(`/api/messages/${messageId}/sources`,{method:'POST',body:JSON.stringify({requester_id:signedInId})});
+    panel.replaceChildren();
+    const label=document.createElement('b');label.textContent='출처에서 확인한 내용';panel.append(label);
+    const summary=document.createElement('p');summary.textContent=result.summary;panel.append(summary);
+    const links=document.createElement('div');links.className='source-links';
+    for(const source of result.sources||[]){const link=document.createElement('a');link.href=source.url;link.target='_blank';link.rel='noopener noreferrer';link.textContent=source.title||'원문 보기';links.append(link)}
+    panel.append(links);panel.dataset.loaded='true';
+  }catch{panel.textContent='지금은 출처를 불러오지 못했어요. 잠시 뒤 다시 눌러 주세요.'}
+}
 function showUserProfile(userId){
   const user=userProfilesById[userId]||userProfilesByName[userId];
   if(!user)return;
@@ -451,7 +485,9 @@ function showUserProfile(userId){
 }
 function view(message){
   const mine=isMyMessage(message),user=userProfilesByName[message.sender],avatar=user?.avatar_url||userAvatarByName[message.sender],profileButton=!mine&&user?`<button class="message-avatar profile-trigger" aria-label="${esc(message.sender)} 프로필 보기" onclick="event.stopPropagation();showUserProfile('${user.id}')">${avatarMarkup(message.sender,avatar)}</button>`:'';
-  return `<article class="bubble ${mine?'mine':'peer'}" data-message-id="${esc(message.id)}" ${mine?'':`onclick="inspectMessage(${JSON.stringify(message.body)})"`}>${profileButton}<div class="meta"><span>${mine?'나':esc(message.sender)}</span><time>${messageTime(message.created)}</time></div>${esc(message.body)}${mine&&message.unread?`<span class="read">${message.unread}</span>`:''}${mine?`<button class="delete-message" title="메시지 삭제" onclick="removeMessage('${message.id}')">×</button>`:''}</article>`;
+  const reply=message.reply_to?`<div class="reply-quote"><b>↩ ${esc(message.reply_to.sender)}</b><span>${esc(message.reply_to.body)}</span></div>`:'';
+  const source=message.has_sources?`<button type="button" class="source-toggle" aria-label="출처 보기" aria-expanded="false" onclick="event.stopPropagation();toggleSources(this,'${message.id}')">⌄</button><div class="source-panel" hidden onclick="event.stopPropagation()"></div>`:'';
+  return `<article class="bubble ${mine?'mine':'peer'}" data-message-id="${esc(message.id)}" ${mine?'':`onclick="inspectMessage(${JSON.stringify(message.body)})"`}>${profileButton}<div class="meta"><span>${mine?'나':esc(message.sender)}</span><time>${messageTime(message.created)}</time></div>${reply}<div class="message-body">${esc(message.body)}</div>${mine&&message.unread?`<span class="read">${message.unread}</span>`:''}<div class="message-tools">${source}<button type="button" class="reply-message" aria-label="답장" title="답장" onclick="event.stopPropagation();startReply('${message.id}')">↩</button></div>${mine?`<button class="delete-message" title="메시지 삭제" onclick="event.stopPropagation();removeMessage('${message.id}')">×</button>`:''}</article>`;
 }
 async function friends(){
   nav='friends';
@@ -588,7 +624,7 @@ async function openRoom(id) {
   roomMessages = messages.slice();
   feed.applied = request;
   const title=roomDisplayName(room),names=roomPeople(room).join(', '),profile=userProfilesByName[title],titleMarkup=profile?`<button class="chat-profile-trigger" onclick="showUserProfile('${profile.id}')"><h1>${esc(title)}</h1><span>${esc(names)} · ${room.members}명</span></button>`:`<div class="room-title"><h1>${esc(title)}</h1><span>${esc(names)} · ${room.members}명</span></div>`;
-  app.innerHTML=`<main class="layout android-layout">${rail()}<section class="chat"><header class="head chat-head"><button class="back" onclick="home()">‹</button>${titleMarkup}<div class="chat-actions"><button onclick="inviteFriends()">＋ 초대</button><button onclick="newAgreement()">✓</button><button class="room-more" aria-label="채팅방 메뉴" onclick="roomMenu()">⋯</button></div></header><div class="room-notice-host" id="room-schedule-notice">${roomScheduleNotice(id)}</div><section class="messages" id="messages" data-room-id="${esc(id)}">${messages.map(view).join('')}</section><form class="sendbar" onsubmit="send(event)"><input id="text" placeholder="메시지를 입력하세요" autocomplete="off" oninput="handleChatInput(this.value)"><span id="ai-status" class="ai-status"></span><button type="submit" aria-label="보내기">↑</button></form></section></main>`;
+  app.innerHTML=`<main class="layout android-layout">${rail()}<section class="chat"><header class="head chat-head"><button class="back" onclick="home()">‹</button>${titleMarkup}<div class="chat-actions"><button onclick="inviteFriends()">＋ 초대</button><button onclick="newAgreement()">✓</button><button class="room-more" aria-label="채팅방 메뉴" onclick="roomMenu()">⋯</button></div></header><div class="room-notice-host" id="room-schedule-notice">${roomScheduleNotice(id)}</div><section class="messages" id="messages" data-room-id="${esc(id)}">${messages.map(view).join('')}</section><form class="sendbar" onsubmit="send(event)"><div id="reply-compose" class="reply-compose" hidden></div><input id="text" placeholder="메시지를 입력하세요" autocomplete="off" oninput="handleChatInput(this.value)"><span id="ai-status" class="ai-status"></span><button type="submit" aria-label="보내기">↑</button></form></section></main>`;
   feed.list = document.querySelector('#messages');
   feed.list.scrollTop = feed.list.scrollHeight;
   document.querySelector('#text')?.focus();
@@ -606,5 +642,6 @@ let userAvatarByName={};
 function roomPeople(room){return (room.participant_names||[]).filter(Boolean)}
 function avatarSource(url){return url||''}
 function roomDisplayName(room){const names=room.direct_member_names||room.participant_names||[];return room.direct_key?(names.find(name=>name!==signedIn)||room.name||'채팅'):room.name||'채팅'}
+function showAiPolicy(){popup(`<div class="ai-policy"><span>Re:Tone AI 안내 · 2026.11</span><h2>내 대화를 돕기 위한 AI 사용</h2><p><b>왜 개입하나요?</b><br>강한 표현을 부드럽게 다듬고, 외부 자료로 확인할 수 있는 정보성 문장에는 접힌 출처 버튼을 붙이기 위해서예요.</p><p><b>무엇을 보내나요?</b><br>보내려는 메시지와 같은 채팅방의 최근 메시지 최대 6개를 필요한 경우 OpenAI API로 보내 점검해요. 출처 화살표를 누르면 해당 문장과 짧은 검색어만 웹 검색에 사용하며, 다른 채팅방 내용·전화번호·비밀번호·프로필은 보내지 않아요.</p><p><b>무엇을 하지 않나요?</b><br>출처 요약을 절대적인 진실로 단정하지 않고, AI가 대신 메시지를 보내지 않아요. 링크의 원문과 작성 날짜를 함께 확인해 주세요.</p><small>AI 점검 결과와 이미 찾은 출처는 같은 요청을 빠르게 처리하기 위해 보관될 수 있어요.</small><button onclick="closePopup()">확인했어요</button></div>`)}
 start();
 

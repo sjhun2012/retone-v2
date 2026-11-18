@@ -103,6 +103,43 @@ async function verify() {
     assert.equal(await sender.locator('[data-schedule-offer]').count(), 1);
     assert.equal(await bubble(sender, question).locator('[data-schedule-offer]').count(), 0);
 
+    const claimText = '지구는 태양을 약 365일에 한 번 공전해.';
+    await sender.route('**/api/ai/check', async route => {
+      const payload = route.request().postDataJSON();
+      if (payload.text !== claimText) return route.fallback();
+      await route.fulfill({status: 200, contentType: 'application/json', body: JSON.stringify({
+        verdict: 'PASS', suggestion: null, info: {level: 'none', note: null, queries: ['지구 태양 공전 주기']}, source: 'ai'
+      })});
+    });
+    const claim = await send(sender, room, claimText);
+    await sender.unroute('**/api/ai/check');
+    await bubble(peer, claim).waitFor();
+    const sourceToggle = bubble(peer, claim).getByRole('button', {name: '출처 보기'});
+    assert.equal(await sourceToggle.textContent(), '⌄');
+    assert.equal(await bubble(peer, claim).locator('.source-panel').isHidden(), true);
+    await peer.route(`**/api/messages/${claim.id}/sources`, route => route.fulfill({
+      status: 200, contentType: 'application/json', body: JSON.stringify({
+        summary: 'NASA 자료에서 지구의 공전 주기는 약 365.25일로 확인됩니다.',
+        sources: [{title: 'NASA Solar System Exploration', url: 'https://science.nasa.gov/earth/facts/'}]
+      })
+    }));
+    await sourceToggle.click();
+    const sourcePanel = bubble(peer, claim).locator('.source-panel');
+    await sourcePanel.getByText('NASA 자료에서').waitFor();
+    assert.equal(await sourcePanel.getByRole('link', {name: 'NASA Solar System Exploration'}).getAttribute('href'), 'https://science.nasa.gov/earth/facts/');
+    await sourceToggle.click();
+    assert.equal(await sourcePanel.isHidden(), true);
+
+    await bubble(peer, claim).getByRole('button', {name: '답장'}).click();
+    const replyDraft = peer.locator('#reply-compose');
+    await replyDraft.getByText(claimText).waitFor();
+    const reply = await send(peer, room, '응, 출처 링크도 같이 볼게.');
+    assert.equal(reply.reply_to.message_id, claim.id);
+    assert.equal(reply.reply_to.body, claimText);
+    await bubble(sender, reply).waitFor();
+    await bubble(sender, reply).locator('.reply-quote').getByText(claimText).waitFor();
+    assert.equal(await replyDraft.isHidden(), true);
+
     await offer.click();
     const form = sender.locator('#schedule-editor');
     await form.getByLabel('일정 제목').fill('토요일 영화');
@@ -154,6 +191,7 @@ async function verify() {
     await bubble(peer, question).waitFor();
     assert.equal(await bubble(peer, invite).count(), 0);
     assert.equal(await bubble(peer, acknowledgement).count(), 0);
+    assert.equal(await bubble(peer, reply).locator('.reply-quote').getByText(claimText).count(), 1);
     assert.equal(await peer.locator('[data-schedule-offer]').count(), 0);
     assert.deepEqual(errors, []);
     const {verifyScheduleApi} = await import('./schedule-api.mjs');

@@ -1,6 +1,7 @@
 mod ai_rules;
 mod ai_transport;
 mod rewrite;
+mod sources;
 use argon2::{Argon2, PasswordHash, PasswordHasher, PasswordVerifier};
 use axum::{
     Json, Router,
@@ -16,7 +17,7 @@ use rand_core::OsRng;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use sqlx::{PgPool, postgres::PgPoolOptions};
-use std::{convert::Infallible, env, net::SocketAddr, sync::Arc};
+use std::{collections::HashMap, convert::Infallible, env, net::SocketAddr, sync::Arc};
 use tokio::sync::{RwLock, broadcast};
 use tower_http::services::ServeDir;
 use uuid::Uuid;
@@ -47,6 +48,17 @@ struct Message {
     created: i64,
     unread: u8,
     read_by: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    reply_to: Option<ReplyPreview>,
+    has_sources: bool,
+    #[serde(skip_serializing)]
+    source_query: Option<String>,
+}
+#[derive(Clone, Serialize)]
+struct ReplyPreview {
+    message_id: String,
+    sender: String,
+    body: String,
 }
 #[derive(Clone, Serialize)]
 struct Agreement {
@@ -93,6 +105,7 @@ struct Data {
     appointments: Vec<Appointment>,
     friend_requests: Vec<FriendRequest>,
     friendships: Vec<Friendship>,
+    source_cache: HashMap<String, sources::SourceInsight>,
 }
 #[derive(Clone)]
 struct FriendRequest {
@@ -116,6 +129,12 @@ struct Send {
     sender: String,
     sender_id: Option<Uuid>,
     body: String,
+    reply_to_id: Option<String>,
+    source_query: Option<String>,
+}
+#[derive(Deserialize)]
+struct SourceRequest {
+    requester_id: Uuid,
 }
 #[derive(Deserialize)]
 struct NewRoom {
@@ -528,7 +547,7 @@ async fn ai_check(State(app): State<App>, Json(input): Json<AiCheck>) -> Json<se
     }
     let hash = format!(
         "{:x}",
-        Sha256::digest(format!("v7:{level}:{text}:{sender}:{context}").as_bytes())
+        Sha256::digest(format!("v8:{level}:{text}:{sender}:{context}").as_bytes())
     );
     if let Some(db) = &app.db {
         if let Ok(Some((verdict,suggestion,info_level,info_note,info_queries)))=sqlx::query_as::<_,(String,Option<String>,String,Option<String>,Vec<String>)>("SELECT verdict,suggestion,info_level,info_note,info_queries FROM retone_v2.ai_cache WHERE message_hash=$1").bind(&hash).fetch_optional(db).await{return Json(serde_json::json!({"verdict":verdict,"suggestion":suggestion,"info":{"level":info_level,"note":info_note,"queries":info_queries},"source":"cache"}));}
@@ -543,7 +562,7 @@ async fn ai_check(State(app): State<App>, Json(input): Json<AiCheck>) -> Json<se
     };
     let local_trigger = attack.map(|(matched, _)| matched).unwrap_or("없음");
     let prompt = format!(
-        "너는 Re:Tone의 전송 전 문장 편집자다. 지금 검사할 대상은 오직 '{sender}'가 작성한 현재 문장 하나다. 최근 대화는 뜻과 화자를 이해하는 참고 자료일 뿐이다. 최근 대화 속 다른 사람의 욕설·공격 때문에 현재 문장을 WARN하면 안 된다.\n1) 현재 문장 자체에 심한 욕설·위협·조롱·비꼼·압박이 있을 때만 WARN한다. 친한 사이의 가벼운 농담은 PASS한다. 서버가 현재 문장에서 찾은 표현은 '{local_trigger}'이다. '없음'이 아니면 WARN한다.\n2) WARN이면 trigger에 현재 문장에 실제로 연속해서 들어 있는 문제 표현을 그대로 짧게 복사한다. trigger를 현재 문장에서 정확히 복사할 수 없다면 PASS한다. PASS이면 trigger와 suggestion은 null이다.\n3) WARN의 suggestion은 설명이나 따옴표 없이 사용자가 바로 보낼 수 있는 다듬은 문장 하나다. 질문은 같은 정보를 묻는 질문으로, 요청·거절·유보는 같은 의도로 유지한다. 날짜·시각·수량·장소·담당자와 원문의 존댓말·반말을 보존한다. 맥락에 없는 사과·이유·감정·약속을 만들지 않는다. 상대의 능력·성격을 평가하거나 '이것도 못 해?', '왜 제대로 못 해?'처럼 비난하는 질문을 남기지 않는다. 원하는 행동과 이유를 구체적으로 말한다. 예를 들어 '씨발, 이것도 제대로 못 해? 오늘 4시까지 다시 해.'는 '이 부분이 제대로 되지 않아 답답해. 오늘 4시까지 다시 확인해 줘.'처럼 쓴다. 완성된 suggestion만 다시 검사해도 PASS가 되어야 한다.\n4) 건강·안전·법·돈·정치·재난·통계·속보성 주장에 출처·날짜·원문이 빠졌다면 info.level=check로 둔다. 사실 여부를 판정하지 않는다. 정보 확인만 필요한 문장은 PASS다.\n5) 현재 개입 강도는 {level}이다. standard는 뚜렷한 경우만, careful은 비꼼·오해 가능성까지 본다.\nJSON만 출력: {{\"verdict\":\"PASS|WARN\",\"trigger\":string|null,\"suggestion\":string|null,\"info\":{{\"level\":\"none|check\",\"note\":string|null,\"queries\":[string]}}}}.\n최근 대화(참고만 함):\n{context}\n현재 문장({sender} 작성): {text}"
+        "너는 Re:Tone의 전송 전 문장 편집자다. 지금 검사할 대상은 오직 '{sender}'가 작성한 현재 문장 하나다. 최근 대화는 뜻과 화자를 이해하는 참고 자료일 뿐이다. 최근 대화 속 다른 사람의 욕설·공격 때문에 현재 문장을 WARN하면 안 된다.\n1) 현재 문장 자체에 심한 욕설·위협·조롱·비꼼·압박이 있을 때만 WARN한다. 친한 사이의 가벼운 농담은 PASS한다. 서버가 현재 문장에서 찾은 표현은 '{local_trigger}'이다. '없음'이 아니면 WARN한다.\n2) WARN이면 trigger에 현재 문장에 실제로 연속해서 들어 있는 문제 표현을 그대로 짧게 복사한다. trigger를 현재 문장에서 정확히 복사할 수 없다면 PASS한다. PASS이면 trigger와 suggestion은 null이다.\n3) WARN의 suggestion은 설명이나 따옴표 없이 사용자가 바로 보낼 수 있는 다듬은 문장 하나다. 질문은 같은 정보를 묻는 질문으로, 요청·거절·유보는 같은 의도로 유지한다. 날짜·시각·수량·장소·담당자와 원문의 존댓말·반말을 보존한다. 맥락에 없는 사과·이유·감정·약속을 만들지 않는다. 상대의 능력·성격을 평가하거나 '이것도 못 해?', '왜 제대로 못 해?'처럼 비난하는 질문을 남기지 않는다. 원하는 행동과 이유를 구체적으로 말한다. 예를 들어 '씨발, 이것도 제대로 못 해? 오늘 4시까지 다시 해.'는 '이 부분이 제대로 되지 않아 답답해. 오늘 4시까지 다시 확인해 줘.'처럼 쓴다. 완성된 suggestion만 다시 검사해도 PASS가 되어야 한다.\n4) 현재 문장이 외부 자료로 확인 가능한 정보를 단정해서 알려주는 문장이면 info.queries에 그 주장 하나를 확인하기 좋은 짧은 한국어 검색어를 정확히 1개 넣는다. 과학·역사·제품 사양·통계·뉴스·제도 등은 포함한다. 질문, 의견, 감정, 인사, 개인 경험, 약속, 일정 제안, 명령·부탁, 수락·거절에는 검색어를 넣지 않는다. 최근 대화에만 있는 정보 때문에 검색어를 만들지 않는다.\n5) 그중 건강·안전·법·돈·정치·재난·통계·속보성 주장에 출처·날짜·원문이 빠졌다면 info.level=check로 둔다. 그 밖의 정보성 주장은 info.level=none으로 두되 검색어는 유지한다. 사실 여부를 판정하지 않는다. 정보 확인만 필요한 문장은 PASS다.\n6) 현재 개입 강도는 {level}이다. standard는 뚜렷한 경우만, careful은 비꼼·오해 가능성까지 본다.\nJSON만 출력: {{\"verdict\":\"PASS|WARN\",\"trigger\":string|null,\"suggestion\":string|null,\"info\":{{\"level\":\"none|check\",\"note\":string|null,\"queries\":[string]}}}}.\n최근 대화(참고만 함):\n{context}\n현재 문장({sender} 작성): {text}"
     );
     let parsed = match ai_transport::structured_response("gpt-4.1-mini", &prompt, None, ai_transport::check_schema(), 700).await {
         Some(value) if matches!(value["verdict"].as_str(), Some("PASS" | "WARN")) => value,
@@ -880,6 +899,20 @@ async fn send(
         .find(|room| room.id == id)
         .map(|room| room.members.saturating_sub(1))
         .unwrap_or(0);
+    let reply_to = match input.reply_to_id.as_deref() {
+        Some(reply_id) => {
+            let original = d.messages.iter().find(|message| message.id == reply_id && message.room_id == id)
+                .ok_or(StatusCode::BAD_REQUEST)?;
+            Some(ReplyPreview {
+                message_id: original.id.clone(),
+                sender: original.sender.clone(),
+                body: original.body.chars().take(180).collect(),
+            })
+        }
+        None => None,
+    };
+    let source_query = input.source_query.map(|query| query.trim().chars().take(180).collect::<String>())
+        .filter(|query| !query.is_empty());
     let message = Message {
         id: Uuid::new_v4().to_string(),
         room_id: id.clone(),
@@ -893,6 +926,9 @@ async fn send(
         created: Utc::now().timestamp_millis(),
         unread,
         read_by: vec![sender],
+        reply_to,
+        has_sources: source_query.is_some(),
+        source_query,
     };
     d.messages.push(message.clone());
     if let Some(room) = d.rooms.iter_mut().find(|r| r.id == id) {
@@ -900,6 +936,25 @@ async fn send(
         room.updated = message.created;
     }
     Ok(Json(message))
+}
+
+async fn message_sources(
+    State(app): State<App>,
+    Path(message_id): Path<String>,
+    Json(input): Json<SourceRequest>,
+) -> Result<Json<sources::SourceInsight>, StatusCode> {
+    let (claim, query, cached) = {
+        let data = app.data.read().await;
+        let message = data.messages.iter().find(|message| message.id == message_id).ok_or(StatusCode::NOT_FOUND)?;
+        let room = data.rooms.iter().find(|room| room.id == message.room_id).ok_or(StatusCode::NOT_FOUND)?;
+        if !room.participant_ids.contains(&input.requester_id.to_string()) { return Err(StatusCode::FORBIDDEN); }
+        let query = message.source_query.clone().ok_or(StatusCode::NOT_FOUND)?;
+        (message.body.clone(), query, data.source_cache.get(&message_id).cloned())
+    };
+    if let Some(result) = cached { return Ok(Json(result)); }
+    let result = sources::search(&claim, &query).await.ok_or(StatusCode::SERVICE_UNAVAILABLE)?;
+    app.data.write().await.source_cache.insert(message_id, result.clone());
+    Ok(Json(result))
 }
 #[derive(Deserialize)]
 struct RoomSubscriber {
@@ -941,6 +996,7 @@ async fn delete_message(
         return StatusCode::NOT_FOUND;
     };
     d.messages.remove(index);
+    d.source_cache.remove(&message_id);
     let last = d.messages.iter().rev().find(|m| m.room_id == room_id)
         .map(|m| (m.body.clone(), m.created));
     if let Some(room) = d.rooms.iter_mut().find(|r| r.id == room_id) {
@@ -1220,6 +1276,7 @@ async fn main() {
             appointments: vec![],
             friend_requests: vec![],
             friendships: vec![],
+            source_cache: HashMap::new(),
         })),
     };
     let router = Router::new()
@@ -1253,6 +1310,7 @@ async fn main() {
         .route("/api/appointments/{id}", patch(update_appointment).delete(delete_appointment))
         .route("/api/appointments/{id}/creator/{creator}", patch(update_own_appointment).delete(delete_own_appointment))
         .route("/api/rooms/{id}/messages", get(messages).post(send))
+        .route("/api/messages/{message_id}/sources", post(message_sources))
         .route("/api/rooms/{id}/rewrite", post(rewrite::in_room))
         .route("/api/rooms/{id}/message-events", get(room_message_events))
         .route("/api/rooms/{id}/read", post(mark_messages_read))
