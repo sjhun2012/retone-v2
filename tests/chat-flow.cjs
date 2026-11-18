@@ -159,7 +159,7 @@ async function verify() {
     const {verifyScheduleApi} = await import('./schedule-api.mjs');
     const secondInvite = await post(`/api/rooms/${room.id}/messages`, {sender: writer.name, body: '금요일 영화 보자.'});
     await verifyScheduleApi(base, secondInvite);
-    await require('./rewrite-flow.cjs')({sender, writer, reader, room, base, post, send});
+    await require('./rewrite-flow.cjs')({sender, peer, writer, reader, room, base, post, send});
     assert.deepEqual(errors, []);
     console.log('Two real browser sessions passed: sender-only offer, both replies, edited details in peer view, and push deletion with polling blocked.');
   } finally { await browser.close(); }
