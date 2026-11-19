@@ -1,5 +1,5 @@
-use super::{App, Data, Message, RewriteRequest, ai_transport};
-use axum::{Json, extract::{Path, State}, http::StatusCode};
+use super::{App, AuthUser, Data, Message, RewriteRequest, ai_transport};
+use axum::{Extension, Json, extract::{Path, State}, http::StatusCode};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::future::Future;
@@ -91,13 +91,13 @@ fn unavailable() -> Json<Value> {
 }
 
 pub(super) async fn in_room(
-    State(app): State<App>, Path(room): Path<String>, Json(request): Json<Draft>,
+    State(app): State<App>, Extension(auth): Extension<AuthUser>, Path(room): Path<String>, Json(request): Json<Draft>,
 ) -> Result<Json<Value>, StatusCode> {
     let draft = request.text.trim();
     if draft.is_empty() { return Err(StatusCode::BAD_REQUEST); }
-    let writer = account_name(&app, request.user_id).await?;
+    let writer = auth.name;
     rewrite_latest(
-        || history(&app, &room, request.user_id, &writer),
+        || history(&app, &room, auth.id, &writer),
         |turns| suggest(&writer, draft, turns, ask_editor),
     ).await
 }

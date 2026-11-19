@@ -25,7 +25,7 @@ jobs:
         run: |
           cargo build --locked
           npm install --no-audit --no-fund --prefix "$RUNNER_TEMP/retone-browser" playwright-core@1.56.1
-          PORT=4000 ./target/debug/retone-v2 &
+          ENABLE_TEST_LOGINS=true RETONE_INSECURE_COOKIES=true PORT=4000 ./target/debug/retone-v2 &
           server_pid=$!
           trap 'kill "$server_pid"' EXIT
           curl --fail --retry 10 --retry-connrefused --retry-delay 1 http://127.0.0.1:4000/api/health

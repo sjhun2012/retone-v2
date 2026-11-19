@@ -4,10 +4,11 @@ mod rewrite;
 mod sources;
 use argon2::{Argon2, PasswordHash, PasswordHasher, PasswordVerifier};
 use axum::{
-    Json, Router,
-    extract::{Path, Query, State},
-    http::StatusCode,
-    response::sse::{Event, KeepAlive, Sse},
+    Extension, Json, Router,
+    extract::{Path, Query, Request, State},
+    http::{HeaderMap, HeaderName, HeaderValue, Method, StatusCode, header},
+    middleware::{self, Next},
+    response::{IntoResponse, Response, sse::{Event, KeepAlive, Sse}},
     routing::{delete, get, patch, post},
 };
 use chrono::Utc;
@@ -19,7 +20,7 @@ use sha2::{Digest, Sha256};
 use sqlx::{PgPool, postgres::PgPoolOptions};
 use std::{collections::HashMap, convert::Infallible, env, net::SocketAddr, sync::Arc};
 use tokio::sync::{RwLock, broadcast};
-use tower_http::services::ServeDir;
+use tower_http::{services::ServeDir, set_header::SetResponseHeaderLayer};
 use uuid::Uuid;
 
 #[derive(Clone, Serialize)]
@@ -65,6 +66,9 @@ struct Agreement {
     task: String,
     assignee: String,
     deadline: String,
+    room_id: String,
+    #[serde(skip_serializing)]
+    owner_id: Uuid,
 }
 #[derive(Clone, Serialize)]
 struct Appointment {
@@ -72,6 +76,8 @@ struct Appointment {
     title: String,
     fields: Vec<ScheduleField>,
     creator: String,
+    #[serde(skip_serializing)]
+    creator_id: Uuid,
     source_message_id: Option<String>,
     room_id: Option<String>,
 }
@@ -123,6 +129,24 @@ struct App {
     data: Arc<RwLock<Data>>,
     db: Option<PgPool>,
     deletions: broadcast::Sender<(String, String)>,
+    sessions: Arc<RwLock<HashMap<String, Session>>>,
+    login_attempts: Arc<RwLock<HashMap<String, LoginAttempt>>>,
+}
+#[derive(Clone)]
+struct Session {
+    user_id: Uuid,
+    name: String,
+    expires_at: i64,
+}
+#[derive(Clone)]
+struct LoginAttempt {
+    failures: u8,
+    blocked_until: i64,
+}
+#[derive(Clone)]
+pub(super) struct AuthUser {
+    id: Uuid,
+    name: String,
 }
 #[derive(Deserialize)]
 struct Send {
@@ -134,7 +158,8 @@ struct Send {
 }
 #[derive(Deserialize)]
 struct SourceRequest {
-    requester_id: Uuid,
+    #[serde(default)]
+    requester_id: Option<Uuid>,
 }
 #[derive(Deserialize)]
 struct NewRoom {
@@ -168,6 +193,7 @@ struct NewAgreement {
     task: String,
     assignee: String,
     deadline: String,
+    room_id: Option<String>,
 }
 #[derive(Deserialize)]
 struct NewAppointment {
@@ -249,6 +275,12 @@ fn phone_hash(phone: &str) -> String {
             .filter(|c| c.is_ascii_digit())
             .collect::<String>()
     )
+}
+
+fn valid_account_name(name: &str) -> bool {
+    let count = name.chars().count();
+    (1..=24).contains(&count)
+        && name.chars().all(|c| c.is_alphanumeric() || c == ' ' || c == '_' || c == '-')
 }
 fn built_in_test_users() -> Vec<DemoUser> {
     [
@@ -342,6 +374,124 @@ fn are_friends(friendships: &[Friendship], first: Uuid, second: Uuid) -> bool {
     })
 }
 
+const SESSION_COOKIE: &str = "retone_session";
+const SESSION_SECONDS: i64 = 60 * 60 * 24 * 7;
+
+fn test_logins_enabled() -> bool {
+    matches!(env::var("ENABLE_TEST_LOGINS").as_deref(), Ok("1" | "true" | "yes"))
+}
+
+fn built_in_test_credentials(name: &str, phone: &str) -> bool {
+    let digits: String = phone.chars().filter(|c| c.is_ascii_digit()).collect();
+    matches!((name.trim(), digits.as_str()), ("신지훈", "01000000000") | ("바나나", "01011111111"))
+}
+
+async fn reject_rate_limited_login(app: &App, key: &str) -> Result<(), StatusCode> {
+    let now = Utc::now().timestamp();
+    let mut attempts = app.login_attempts.write().await;
+    attempts.retain(|_, attempt| attempt.blocked_until > now || attempt.failures > 0);
+    if attempts.get(key).is_some_and(|attempt| attempt.blocked_until > now) {
+        return Err(StatusCode::TOO_MANY_REQUESTS);
+    }
+    Ok(())
+}
+
+async fn record_login_failure(app: &App, key: &str) {
+    let now = Utc::now().timestamp();
+    let mut attempts = app.login_attempts.write().await;
+    let attempt = attempts.entry(key.to_string()).or_insert(LoginAttempt { failures: 0, blocked_until: 0 });
+    attempt.failures = attempt.failures.saturating_add(1);
+    if attempt.failures >= 5 {
+        attempt.failures = 0;
+        attempt.blocked_until = now + 15 * 60;
+    }
+}
+
+fn cookie_value(headers: &HeaderMap, name: &str) -> Option<String> {
+    headers.get(header::COOKIE)?.to_str().ok()?.split(';').find_map(|part| {
+        let (key, value) = part.trim().split_once('=')?;
+        (key == name && !value.is_empty()).then(|| value.to_string())
+    })
+}
+
+fn session_cookie(token: &str, max_age: i64) -> HeaderValue {
+    let secure = if matches!(env::var("RETONE_INSECURE_COOKIES").as_deref(), Ok("1" | "true")) { "" } else { "; Secure" };
+    HeaderValue::from_str(&format!(
+        "{SESSION_COOKIE}={token}; Path=/; Max-Age={max_age}; HttpOnly; SameSite=Strict{secure}"
+    )).expect("session cookie contains only server-generated characters")
+}
+
+async fn create_session(app: &App, user_id: Uuid, name: &str) -> String {
+    let token = format!("{}{}", Uuid::new_v4().simple(), Uuid::new_v4().simple());
+    let expires_at = Utc::now().timestamp() + SESSION_SECONDS;
+    let mut sessions = app.sessions.write().await;
+    sessions.retain(|_, session| session.expires_at > Utc::now().timestamp());
+    sessions.insert(token.clone(), Session { user_id, name: name.to_string(), expires_at });
+    token
+}
+
+fn login_response(user: PublicUser, token: &str) -> Response {
+    let mut response = Json(user).into_response();
+    response.headers_mut().insert(header::SET_COOKIE, session_cookie(token, SESSION_SECONDS));
+    response.headers_mut().insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    response
+}
+
+fn request_origin_is_allowed(headers: &HeaderMap) -> bool {
+    let Some(origin) = headers.get(header::ORIGIN).and_then(|value| value.to_str().ok()) else { return true };
+    let Some(host) = headers.get(header::HOST).and_then(|value| value.to_str().ok()) else { return false };
+    origin == format!("https://{host}")
+        || ((host.starts_with("localhost") || host.starts_with("127.0.0.1")) && origin == format!("http://{host}"))
+}
+
+async fn require_auth(State(app): State<App>, mut request: Request, next: Next) -> Response {
+    if !matches!(*request.method(), Method::GET | Method::HEAD | Method::OPTIONS)
+        && !request_origin_is_allowed(request.headers())
+    {
+        return StatusCode::FORBIDDEN.into_response();
+    }
+    let Some(token) = cookie_value(request.headers(), SESSION_COOKIE) else {
+        return StatusCode::UNAUTHORIZED.into_response();
+    };
+    let now = Utc::now().timestamp();
+    let session = {
+        let mut sessions = app.sessions.write().await;
+        sessions.retain(|_, session| session.expires_at > now);
+        sessions.get(&token).cloned()
+    };
+    let Some(session) = session else { return StatusCode::UNAUTHORIZED.into_response() };
+    request.extensions_mut().insert(AuthUser { id: session.user_id, name: session.name });
+    let is_api = request.uri().path().starts_with("/api/");
+    let mut response = next.run(request).await;
+    if is_api { response.headers_mut().insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store")); }
+    response
+}
+
+async fn public_config() -> Json<serde_json::Value> {
+    Json(serde_json::json!({"test_logins": test_logins_enabled()}))
+}
+
+async fn auth_me(State(app): State<App>, Extension(auth): Extension<AuthUser>) -> Result<Json<PublicUser>, StatusCode> {
+    let row = if let Some(db) = &app.db {
+        sqlx::query_as::<_,(Uuid,String,Option<String>,String,String)>("SELECT id,name,avatar_url,status_message,ai_intervention FROM retone_v2.users WHERE id=$1 AND deleted_at IS NULL")
+            .bind(auth.id).fetch_optional(db).await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?.ok_or(StatusCode::UNAUTHORIZED)?
+    } else {
+        let data = app.data.read().await;
+        let user = data.users.iter().find(|user| user.id == auth.id).ok_or(StatusCode::UNAUTHORIZED)?;
+        (user.id, user.name.clone(), user.avatar_url.clone(), user.status_message.clone(), user.ai_intervention.clone())
+    };
+    Ok(Json(user_out(row.0, row.1, row.2, row.3, row.4)))
+}
+
+async fn logout(State(app): State<App>, headers: HeaderMap) -> Response {
+    if let Some(token) = cookie_value(&headers, SESSION_COOKIE) {
+        app.sessions.write().await.remove(&token);
+    }
+    let mut response = StatusCode::NO_CONTENT.into_response();
+    response.headers_mut().insert(header::SET_COOKIE, session_cookie("", 0));
+    response
+}
+
 async fn health() -> Json<serde_json::Value> {
     let storage = env::var("DATABASE_URL").is_ok();
     Json(
@@ -351,12 +501,12 @@ async fn health() -> Json<serde_json::Value> {
 async fn signup(
     State(app): State<App>,
     Json(input): Json<Credentials>,
-) -> Result<Json<PublicUser>, StatusCode> {
+) -> Result<Response, StatusCode> {
     let name = input.name.trim();
     let phone = phone_hash(&input.phone);
-    if name.is_empty()
+    if !valid_account_name(name)
         || input.phone.chars().filter(|c| c.is_ascii_digit()).count() < 7
-        || input.password.len() < 6
+        || input.password.len() < 8
     {
         return Err(StatusCode::BAD_REQUEST);
     }
@@ -368,7 +518,7 @@ async fn signup(
     let id = Uuid::new_v4();
     let level = ai_level(input.ai_intervention.as_deref());
     if let Some(db) = &app.db {
-        let result=sqlx::query("INSERT INTO retone_v2.users(id,phone_hash,name,password_hash,is_admin,ai_intervention) VALUES($1,$2,$3,$4,$5,$6)").bind(id).bind(&phone).bind(name).bind(&hash).bind(input.phone=="12341234"&&name=="12341234").bind(&level).execute(db).await;
+        let result=sqlx::query("INSERT INTO retone_v2.users(id,phone_hash,name,password_hash,is_admin,ai_intervention) VALUES($1,$2,$3,$4,$5,$6)").bind(id).bind(&phone).bind(name).bind(&hash).bind(false).bind(&level).execute(db).await;
         if result.is_err() {
             return Err(StatusCode::CONFLICT);
         };
@@ -379,43 +529,61 @@ async fn signup(
         }
         data.users.push(DemoUser { id, phone_hash: phone, name: name.to_string(), password_hash: hash, avatar_url: None, status_message: String::new(), ai_intervention: level.clone() });
     }
-    Ok(Json(user_out(id, name.to_string(), None, String::new(), level)))
+    let user = user_out(id, name.to_string(), None, String::new(), level);
+    let token = create_session(&app, id, &user.name).await;
+    Ok(login_response(user, &token))
 }
 async fn login(
     State(app): State<App>,
     Json(input): Json<Credentials>,
-) -> Result<Json<PublicUser>, StatusCode> {
+) -> Result<Response, StatusCode> {
+    if built_in_test_credentials(&input.name, &input.phone) && !test_logins_enabled() {
+        return Err(StatusCode::UNAUTHORIZED);
+    }
+    let attempt_key = phone_hash(&input.phone);
+    reject_rate_limited_login(&app, &attempt_key).await?;
     let row = if let Some(db) = &app.db {
-        sqlx::query_as::<_,(Uuid,String,Option<String>,String,String,String)>("SELECT id,name,avatar_url,password_hash,status_message,ai_intervention FROM retone_v2.users WHERE phone_hash=$1 AND name=$2 AND deleted_at IS NULL").bind(phone_hash(&input.phone)).bind(input.name.trim()).fetch_optional(db).await.map_err(|_|StatusCode::INTERNAL_SERVER_ERROR)?.ok_or(StatusCode::UNAUTHORIZED)?
+        sqlx::query_as::<_,(Uuid,String,Option<String>,String,String,String)>("SELECT id,name,avatar_url,password_hash,status_message,ai_intervention FROM retone_v2.users WHERE phone_hash=$1 AND name=$2 AND deleted_at IS NULL").bind(&attempt_key).bind(input.name.trim()).fetch_optional(db).await.map_err(|_|StatusCode::INTERNAL_SERVER_ERROR)?
     } else {
         let data = app.data.read().await;
-        let user = data.users.iter().find(|user| user.phone_hash == phone_hash(&input.phone) && user.name == input.name.trim()).ok_or(StatusCode::UNAUTHORIZED)?;
-        (user.id, user.name.clone(), user.avatar_url.clone(), user.password_hash.clone(), user.status_message.clone(), user.ai_intervention.clone())
+        data.users.iter().find(|user| user.phone_hash == attempt_key && user.name == input.name.trim())
+            .map(|user| (user.id, user.name.clone(), user.avatar_url.clone(), user.password_hash.clone(), user.status_message.clone(), user.ai_intervention.clone()))
+    };
+    let Some(row) = row else {
+        record_login_failure(&app, &attempt_key).await;
+        return Err(StatusCode::UNAUTHORIZED);
     };
     let parsed = PasswordHash::new(&row.3).map_err(|_| StatusCode::UNAUTHORIZED)?;
-    Argon2::default()
-        .verify_password(input.password.as_bytes(), &parsed)
-        .map_err(|_| StatusCode::UNAUTHORIZED)?;
-    Ok(Json(user_out(row.0, row.1, row.2, row.4, row.5)))
+    if Argon2::default().verify_password(input.password.as_bytes(), &parsed).is_err() {
+        record_login_failure(&app, &attempt_key).await;
+        return Err(StatusCode::UNAUTHORIZED);
+    }
+    app.login_attempts.write().await.remove(&attempt_key);
+    let user = user_out(row.0, row.1, row.2, row.4, row.5);
+    let token = create_session(&app, user.id, &user.name).await;
+    Ok(login_response(user, &token))
 }
-async fn users(State(app): State<App>) -> Result<Json<Vec<PublicUser>>, StatusCode> {
+async fn users(State(app): State<App>, Extension(auth): Extension<AuthUser>) -> Result<Json<Vec<PublicUser>>, StatusCode> {
     let rows = if let Some(db) = &app.db {
         sqlx::query_as::<_,(Uuid,String,Option<String>,String,String)>("SELECT id,name,avatar_url,status_message,ai_intervention FROM retone_v2.users WHERE deleted_at IS NULL ORDER BY created_at").fetch_all(db).await.map_err(|_|StatusCode::INTERNAL_SERVER_ERROR)?
     } else {
         let data = app.data.read().await;
         data.users.iter().map(|user| (user.id, user.name.clone(), user.avatar_url.clone(), user.status_message.clone(), user.ai_intervention.clone())).collect()
     };
+    let data = app.data.read().await;
     Ok(Json(
-        rows.into_iter()
+        rows.into_iter().filter(|row| row.0 == auth.id || are_friends(&data.friendships, auth.id, row.0))
             .map(|r| user_out(r.0, r.1, r.2, r.3, r.4))
             .collect(),
     ))
 }
 async fn update_preferences(
     State(app): State<App>,
+    Extension(auth): Extension<AuthUser>,
     Path(id): Path<Uuid>,
     Json(input): Json<Preferences>,
 ) -> Result<Json<PublicUser>, StatusCode> {
+    if id != auth.id { return Err(StatusCode::FORBIDDEN); }
     let level = ai_level(Some(&input.ai_intervention));
     let row = if let Some(db) = &app.db {
         sqlx::query_as::<_,(Uuid,String,Option<String>,String,String)>("UPDATE retone_v2.users SET ai_intervention=$1 WHERE id=$2 AND deleted_at IS NULL RETURNING id,name,avatar_url,status_message,ai_intervention").bind(&level).bind(id).fetch_optional(db).await.map_err(|_|StatusCode::INTERNAL_SERVER_ERROR)?.ok_or(StatusCode::NOT_FOUND)?
@@ -429,10 +597,12 @@ async fn update_preferences(
 }
 async fn update_avatar(
     State(app): State<App>,
+    Extension(auth): Extension<AuthUser>,
     Path(id): Path<Uuid>,
     Json(input): Json<AvatarUpdate>,
 ) -> Result<Json<PublicUser>, StatusCode> {
-    let avatar_url = input.avatar_url.filter(|url| url.len() <= 300_000);
+    if id != auth.id { return Err(StatusCode::FORBIDDEN); }
+    let avatar_url = input.avatar_url.filter(|url| url.len() <= 300_000 && ["data:image/png;base64,", "data:image/jpeg;base64,", "data:image/webp;base64,"].iter().any(|prefix| url.starts_with(prefix)));
     let row = if let Some(db) = &app.db {
         sqlx::query_as::<_, (Uuid, String, Option<String>, String, String)>("UPDATE retone_v2.users SET avatar_url=$1 WHERE id=$2 AND deleted_at IS NULL RETURNING id,name,avatar_url,status_message,ai_intervention")
             .bind(&avatar_url)
@@ -451,9 +621,11 @@ async fn update_avatar(
 }
 async fn update_status(
     State(app): State<App>,
+    Extension(auth): Extension<AuthUser>,
     Path(id): Path<Uuid>,
     Json(input): Json<StatusUpdate>,
 ) -> Result<Json<PublicUser>, StatusCode> {
+    if id != auth.id { return Err(StatusCode::FORBIDDEN); }
     let status = input.status_message.trim().chars().take(60).collect::<String>();
     let row = if let Some(db) = &app.db {
         sqlx::query_as::<_, (Uuid, String, Option<String>, String, String)>("UPDATE retone_v2.users SET status_message=$1 WHERE id=$2 AND deleted_at IS NULL RETURNING id,name,avatar_url,status_message,ai_intervention")
@@ -471,8 +643,9 @@ async fn update_status(
     };
     Ok(Json(user_out(row.0, row.1, row.2, row.3, row.4)))
 }
-async fn delete_account(State(app): State<App>, Path(id): Path<Uuid>) -> StatusCode {
-    if let Some(db) = &app.db {
+async fn delete_account(State(app): State<App>, Extension(auth): Extension<AuthUser>, Path(id): Path<Uuid>) -> StatusCode {
+    if id != auth.id { return StatusCode::FORBIDDEN; }
+    let status = if let Some(db) = &app.db {
         match sqlx::query("UPDATE retone_v2.users SET deleted_at=NOW() WHERE id=$1 AND deleted_at IS NULL").bind(id).execute(db).await {
             Ok(result) if result.rows_affected() == 1 => StatusCode::NO_CONTENT,
             Ok(_) => StatusCode::NOT_FOUND,
@@ -490,7 +663,11 @@ async fn delete_account(State(app): State<App>, Path(id): Path<Uuid>) -> StatusC
         data.rooms.retain(|room| !removed_room_ids.contains(&room.id));
         data.messages.retain(|message| !removed_room_ids.contains(&message.room_id));
         StatusCode::NO_CONTENT
+    };
+    if status == StatusCode::NO_CONTENT {
+        app.sessions.write().await.retain(|_, session| session.user_id != id);
     }
+    status
 }
 fn warns_about_current_message(text: &str, result: &serde_json::Value) -> bool {
     result["verdict"] == "WARN"
@@ -805,20 +982,23 @@ async fn ai_support(Json(input): Json<RewriteRequest>) -> Json<serde_json::Value
 }
 async fn report_ai(
     State(app): State<App>,
+    Extension(auth): Extension<AuthUser>,
     Json(input): Json<AiReport>,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
-    if input.reporter_name.trim().is_empty() || input.original_text.trim().is_empty() {
+    if input.original_text.trim().is_empty() {
         return Err(StatusCode::BAD_REQUEST);
     };
     if let Some(db) = &app.db {
-        sqlx::query("INSERT INTO retone_v2.ai_reports(id,reporter_name,original_text,ai_result) VALUES($1,$2,$3,$4)").bind(Uuid::new_v4()).bind(input.reporter_name.trim()).bind(input.original_text.trim()).bind(input.ai_result).execute(db).await.map_err(|_|StatusCode::INTERNAL_SERVER_ERROR)?;
+        sqlx::query("INSERT INTO retone_v2.ai_reports(id,reporter_name,original_text,ai_result) VALUES($1,$2,$3,$4)").bind(Uuid::new_v4()).bind(&auth.name).bind(input.original_text.trim()).bind(input.ai_result).execute(db).await.map_err(|_|StatusCode::INTERNAL_SERVER_ERROR)?;
     }
     Ok(Json(serde_json::json!({"ok":true})))
 }
 async fn friends_for_user(
     State(app): State<App>,
+    Extension(auth): Extension<AuthUser>,
     Path(id): Path<Uuid>,
 ) -> Result<Json<Vec<PublicUser>>, StatusCode> {
+    if id != auth.id { return Err(StatusCode::FORBIDDEN); }
     let data = app.data.read().await;
     if !data.users.iter().any(|user| user.id == id) {
         return Err(StatusCode::NOT_FOUND);
@@ -832,8 +1012,10 @@ async fn friends_for_user(
 }
 async fn incoming_friend_requests(
     State(app): State<App>,
+    Extension(auth): Extension<AuthUser>,
     Path(id): Path<Uuid>,
 ) -> Result<Json<Vec<FriendRequestOut>>, StatusCode> {
+    if id != auth.id { return Err(StatusCode::FORBIDDEN); }
     let data = app.data.read().await;
     if !data.users.iter().any(|user| user.id == id) {
         return Err(StatusCode::NOT_FOUND);
@@ -845,24 +1027,27 @@ async fn incoming_friend_requests(
 }
 async fn create_friend_request(
     State(app): State<App>,
+    Extension(auth): Extension<AuthUser>,
     Json(input): Json<FriendRequestInput>,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
     let mut data = app.data.write().await;
     let target_phone = phone_hash(&input.phone);
     let target = data.users.iter().find(|user| user.phone_hash == target_phone).map(|user| user.id).ok_or(StatusCode::NOT_FOUND)?;
-    if target == input.sender_id || !data.users.iter().any(|user| user.id == input.sender_id) {
+    if target == auth.id || !data.users.iter().any(|user| user.id == auth.id) {
         return Err(StatusCode::BAD_REQUEST);
     }
-    if are_friends(&data.friendships, input.sender_id, target) || data.friend_requests.iter().any(|request| (request.from_id == input.sender_id && request.to_id == target) || (request.from_id == target && request.to_id == input.sender_id)) {
+    if are_friends(&data.friendships, auth.id, target) || data.friend_requests.iter().any(|request| (request.from_id == auth.id && request.to_id == target) || (request.from_id == target && request.to_id == auth.id)) {
         return Err(StatusCode::CONFLICT);
     }
-    data.friend_requests.push(FriendRequest { id: Uuid::new_v4().to_string(), from_id: input.sender_id, to_id: target });
+    data.friend_requests.push(FriendRequest { id: Uuid::new_v4().to_string(), from_id: auth.id, to_id: target });
     Ok(Json(serde_json::json!({"ok":true})))
 }
 async fn accept_friend_request(
     State(app): State<App>,
+    Extension(auth): Extension<AuthUser>,
     Path((request_id, receiver_id)): Path<(String, Uuid)>,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
+    if receiver_id != auth.id { return Err(StatusCode::FORBIDDEN); }
     let mut data = app.data.write().await;
     let index = data.friend_requests.iter().position(|request| request.id == request_id && request.to_id == receiver_id).ok_or(StatusCode::NOT_FOUND)?;
     let request = data.friend_requests.remove(index);
@@ -873,8 +1058,10 @@ async fn accept_friend_request(
 }
 async fn decline_friend_request(
     State(app): State<App>,
+    Extension(auth): Extension<AuthUser>,
     Path((request_id, receiver_id)): Path<(String, Uuid)>,
 ) -> StatusCode {
+    if receiver_id != auth.id { return StatusCode::FORBIDDEN; }
     let mut data = app.data.write().await;
     let before = data.friend_requests.len();
     data.friend_requests.retain(|request| !(request.id == request_id && request.to_id == receiver_id));
@@ -882,8 +1069,10 @@ async fn decline_friend_request(
 }
 async fn remove_friend(
     State(app): State<App>,
+    Extension(auth): Extension<AuthUser>,
     Path((user_id, friend_id)): Path<(Uuid, Uuid)>,
 ) -> StatusCode {
+    if user_id != auth.id { return StatusCode::FORBIDDEN; }
     let mut data = app.data.write().await;
     let before = data.friendships.len();
     data.friendships.retain(|friendship| !((friendship.first_id == user_id && friendship.second_id == friend_id) || (friendship.first_id == friend_id && friendship.second_id == user_id)));
@@ -899,8 +1088,10 @@ async fn remove_friend(
 }
 async fn leave_room(
     State(app): State<App>,
+    Extension(auth): Extension<AuthUser>,
     Path((room_id, user_id)): Path<(String, Uuid)>,
 ) -> StatusCode {
+    if user_id != auth.id { return StatusCode::FORBIDDEN; }
     let mut data = app.data.write().await;
     let Some(index) = data.rooms.iter().position(|room| room.id == room_id && room.participant_ids.contains(&user_id.to_string())) else {
         return StatusCode::NOT_FOUND;
@@ -917,12 +1108,15 @@ async fn leave_room(
     room.members = room.participant_ids.len().min(u8::MAX as usize) as u8;
     StatusCode::NO_CONTENT
 }
-async fn bootstrap(State(app): State<App>) -> Json<DataOut> {
+async fn bootstrap(State(app): State<App>, Extension(auth): Extension<AuthUser>) -> Json<DataOut> {
     let d = app.data.read().await;
+    let user_id = auth.id.to_string();
+    let rooms: Vec<_> = d.rooms.iter().filter(|room| room.participant_ids.contains(&user_id)).cloned().collect();
+    let room_ids: Vec<_> = rooms.iter().map(|room| room.id.clone()).collect();
     Json(DataOut {
-        rooms: d.rooms.clone(),
-        agreements: d.agreements.clone(),
-        appointments: d.appointments.clone(),
+        rooms,
+        agreements: d.agreements.iter().filter(|agreement| agreement.owner_id == auth.id && room_ids.contains(&agreement.room_id)).cloned().collect(),
+        appointments: d.appointments.iter().filter(|appointment| appointment.room_id.as_ref().is_some_and(|room| room_ids.contains(room)) || appointment.creator_id == auth.id).cloned().collect(),
     })
 }
 #[derive(Serialize)]
@@ -931,32 +1125,29 @@ struct DataOut {
     agreements: Vec<Agreement>,
     appointments: Vec<Appointment>,
 }
-async fn messages(State(app): State<App>, Path(id): Path<String>) -> Json<Vec<Message>> {
+async fn messages(State(app): State<App>, Extension(auth): Extension<AuthUser>, Path(id): Path<String>) -> Result<Json<Vec<Message>>, StatusCode> {
     let d = app.data.read().await;
-    Json(
+    rewrite::require_member(&d, &id, auth.id)?;
+    Ok(Json(
         d.messages
             .iter()
             .filter(|m| m.room_id == id)
             .cloned()
             .collect(),
-    )
+    ))
 }
 async fn send(
     State(app): State<App>,
+    Extension(auth): Extension<AuthUser>,
     Path(id): Path<String>,
     Json(input): Json<Send>,
 ) -> Result<Json<Message>, StatusCode> {
-    let sender = match input.sender_id {
-        Some(id) => rewrite::account_name(&app, id).await?,
-        None => input.sender.trim().chars().take(24).collect::<String>(),
-    };
-    if sender.is_empty() || input.body.trim().is_empty() {
+    let sender = auth.name.clone();
+    if input.body.trim().is_empty() {
         return Err(StatusCode::BAD_REQUEST);
     }
     let mut d = app.data.write().await;
-    if let Some(id_of_sender) = input.sender_id {
-        rewrite::require_member(&d, &id, id_of_sender)?;
-    }
+    rewrite::require_member(&d, &id, auth.id)?;
     let unread = d
         .rooms
         .iter()
@@ -981,7 +1172,7 @@ async fn send(
         id: Uuid::new_v4().to_string(),
         room_id: id.clone(),
         sender: sender.clone(),
-        sender_id: input.sender_id,
+        sender_id: Some(auth.id),
         // A message is not intrinsically "mine": that depends on the person
         // currently looking at it. The browser compares the sender to its
         // signed-in user, so A's message is shown as incoming for B.
@@ -1004,14 +1195,15 @@ async fn send(
 
 async fn message_sources(
     State(app): State<App>,
+    Extension(auth): Extension<AuthUser>,
     Path(message_id): Path<String>,
-    Json(input): Json<SourceRequest>,
+    Json(_input): Json<SourceRequest>,
 ) -> Result<Json<sources::SourceInsight>, StatusCode> {
     let (claim, query, cached) = {
         let data = app.data.read().await;
         let message = data.messages.iter().find(|message| message.id == message_id).ok_or(StatusCode::NOT_FOUND)?;
         let room = data.rooms.iter().find(|room| room.id == message.room_id).ok_or(StatusCode::NOT_FOUND)?;
-        if !room.participant_ids.contains(&input.requester_id.to_string()) { return Err(StatusCode::FORBIDDEN); }
+        if !room.participant_ids.contains(&auth.id.to_string()) { return Err(StatusCode::FORBIDDEN); }
         let query = message.source_query.clone().ok_or(StatusCode::NOT_FOUND)?;
         (message.body.clone(), query, data.source_cache.get(&message_id).cloned())
     };
@@ -1027,12 +1219,13 @@ struct RoomSubscriber {
 
 async fn room_message_events(
     State(app): State<App>,
+    Extension(auth): Extension<AuthUser>,
     Path(room_id): Path<String>,
-    Query(user): Query<RoomSubscriber>,
+    Query(_user): Query<RoomSubscriber>,
 ) -> Result<Sse<impl Stream<Item = Result<Event, Infallible>>>, StatusCode> {
     let data = app.data.read().await;
     let room = data.rooms.iter().find(|room| room.id == room_id).ok_or(StatusCode::NOT_FOUND)?;
-    if !room.participant_ids.contains(&user.user_id) {
+    if !room.participant_ids.contains(&auth.id.to_string()) {
         return Err(StatusCode::FORBIDDEN);
     }
     let receiver = app.deletions.subscribe();
@@ -1053,12 +1246,15 @@ async fn room_message_events(
 
 async fn delete_message(
     State(app): State<App>,
+    Extension(auth): Extension<AuthUser>,
     Path((room_id, message_id)): Path<(String, String)>,
 ) -> StatusCode {
     let mut d = app.data.write().await;
+    if rewrite::require_member(&d, &room_id, auth.id).is_err() { return StatusCode::FORBIDDEN; }
     let Some(index) = d.messages.iter().position(|m| m.room_id == room_id && m.id == message_id) else {
         return StatusCode::NOT_FOUND;
     };
+    if d.messages[index].sender_id != Some(auth.id) { return StatusCode::FORBIDDEN; }
     d.messages.remove(index);
     d.source_cache.remove(&message_id);
     let last = d.messages.iter().rev().find(|m| m.room_id == room_id)
@@ -1076,14 +1272,13 @@ async fn delete_message(
 }
 async fn mark_messages_read(
     State(app): State<App>,
+    Extension(auth): Extension<AuthUser>,
     Path(id): Path<String>,
-    Json(input): Json<ReadMessages>,
+    Json(_input): Json<ReadMessages>,
 ) -> StatusCode {
-    let reader = input.reader.trim();
-    if reader.is_empty() {
-        return StatusCode::BAD_REQUEST;
-    }
+    let reader = auth.name.as_str();
     let mut data = app.data.write().await;
+    if rewrite::require_member(&data, &id, auth.id).is_err() { return StatusCode::FORBIDDEN; }
     for message in data.messages.iter_mut().filter(|message| message.room_id == id) {
         if message.sender != reader && !message.read_by.iter().any(|name| name == reader) {
             message.read_by.push(reader.to_string());
@@ -1094,53 +1289,29 @@ async fn mark_messages_read(
 }
 async fn create_room(
     State(app): State<App>,
+    Extension(auth): Extension<AuthUser>,
     Json(input): Json<NewRoom>,
 ) -> Result<Json<Room>, StatusCode> {
     let name = input.name.trim();
     if name.is_empty() {
         return Err(StatusCode::BAD_REQUEST);
     }
-    let direct_key = input
-        .direct_key
-        .as_deref()
-        .map(str::trim)
-        .filter(|key| !key.is_empty())
-        .map(|key| key.chars().take(100).collect::<String>());
-    let owner = input.owner.as_deref().unwrap_or("").trim().chars().take(24).collect::<String>();
-    let owner_id = input.owner_id.as_deref().and_then(|id| Uuid::parse_str(id.trim()).ok());
-    let mut participant_ids = input.member_ids.unwrap_or_default().into_iter().filter_map(|id| Uuid::parse_str(id.trim()).ok()).collect::<Vec<_>>();
-    if let Some(owner_id) = owner_id {
-        if !participant_ids.contains(&owner_id) {
-            participant_ids.push(owner_id);
-        }
-    }
-    let mut participant_names = Vec::new();
-    for member in input.members.unwrap_or_default() {
-        let member = member.trim().chars().take(24).collect::<String>();
-        if !member.is_empty() && !participant_names.contains(&member) {
-            participant_names.push(member);
-        }
-    }
-    let direct_member_names = direct_key.as_ref().map(|_| {
-        let mut names = Vec::new();
-        if !owner.is_empty() {
-            names.push(owner.clone());
-        }
-        for member in &participant_names {
-            if !names.contains(member) {
-                names.push(member.clone());
-            }
-        }
-        names
-    });
     let mut data = app.data.write().await;
-    if direct_key.is_some() {
-        let Some(owner_id) = owner_id else { return Err(StatusCode::BAD_REQUEST) };
-        let friend_ids = participant_ids.iter().copied().filter(|id| *id != owner_id).collect::<Vec<_>>();
-        if friend_ids.len() != 1 || !are_friends(&data.friendships, owner_id, friend_ids[0]) {
-            return Err(StatusCode::FORBIDDEN);
+    let mut requested_ids = input.member_ids.unwrap_or_default().into_iter()
+        .filter_map(|id| Uuid::parse_str(id.trim()).ok()).filter(|id| *id != auth.id).collect::<Vec<_>>();
+    for member in input.members.unwrap_or_default() {
+        if let Some(id) = data.users.iter().find(|user| user.name == member.trim()).map(|user| user.id) {
+            if id != auth.id && !requested_ids.contains(&id) { requested_ids.push(id); }
         }
     }
+    if requested_ids.iter().any(|id| !are_friends(&data.friendships, auth.id, *id)) { return Err(StatusCode::FORBIDDEN); }
+    let is_direct = input.direct_key.as_deref().is_some_and(|key| !key.trim().is_empty());
+    if is_direct && requested_ids.len() != 1 { return Err(StatusCode::BAD_REQUEST); }
+    let direct_key = is_direct.then(|| {
+        let mut ids = [auth.id.to_string(), requested_ids[0].to_string()];
+        ids.sort();
+        ids.join(":")
+    });
     if let Some(key) = &direct_key {
         if let Some(room) = data
             .rooms
@@ -1150,16 +1321,24 @@ async fn create_room(
             return Ok(Json(room.clone()));
         }
     }
+    let participant_names = requested_ids.iter().filter_map(|id| data.users.iter().find(|user| user.id == *id).map(|user| user.name.clone())).collect::<Vec<_>>();
+    let direct_member_names = direct_key.as_ref().map(|_| {
+        let mut names = vec![auth.name.clone()];
+        names.extend(participant_names.clone());
+        names
+    });
+    let mut participant_ids = vec![auth.id.to_string()];
+    participant_ids.extend(requested_ids.iter().map(Uuid::to_string));
     let room = Room {
         id: Uuid::new_v4().to_string(),
         name: name.chars().take(30).collect(),
-        members: direct_member_names.as_ref().map(|names| names.len()).unwrap_or(participant_names.len() + 1).min(u8::MAX as usize) as u8,
+        members: participant_ids.len().min(u8::MAX as usize) as u8,
         unread: 0,
         pinned: false,
         last: "새 대화를 시작해 보세요.".into(),
         updated: Utc::now().timestamp_millis(),
         participant_names,
-        participant_ids: participant_ids.into_iter().map(|id| id.to_string()).collect(),
+        participant_ids,
         direct_key,
         direct_member_names,
     };
@@ -1168,27 +1347,40 @@ async fn create_room(
 }
 async fn invite_members(
     State(app): State<App>,
+    Extension(auth): Extension<AuthUser>,
     Path(id): Path<String>,
     Json(input): Json<InviteMembers>,
 ) -> Result<Json<Room>, StatusCode> {
     let mut data = app.data.write().await;
-    let room = data.rooms.iter_mut().find(|room| room.id == id).ok_or(StatusCode::NOT_FOUND)?;
-    for member in input.members {
-        let member = member.trim().chars().take(24).collect::<String>();
-        if !member.is_empty() && !room.participant_names.contains(&member) {
-            room.participant_names.push(member);
+    let index = data.rooms.iter().position(|room| room.id == id).ok_or(StatusCode::NOT_FOUND)?;
+    rewrite::require_member(&data, &id, auth.id)?;
+    if data.rooms[index].direct_key.is_some() { return Err(StatusCode::BAD_REQUEST); }
+    let additions = input.members.into_iter().filter_map(|member| {
+        let user = data.users.iter().find(|user| user.name == member.trim())?;
+        are_friends(&data.friendships, auth.id, user.id).then(|| (user.id, user.name.clone()))
+    }).collect::<Vec<_>>();
+    let room = &mut data.rooms[index];
+    for (member_id, member_name) in additions {
+        if !room.participant_ids.contains(&member_id.to_string()) {
+            room.participant_ids.push(member_id.to_string());
+            room.participant_names.push(member_name);
         }
     }
-    room.members = (room.participant_names.len() + 1).min(u8::MAX as usize) as u8;
+    room.members = room.participant_ids.len().min(u8::MAX as usize) as u8;
     Ok(Json(room.clone()))
 }
 async fn create_agreement(
     State(app): State<App>,
+    Extension(auth): Extension<AuthUser>,
     Json(input): Json<NewAgreement>,
 ) -> Result<Json<Agreement>, StatusCode> {
     if input.task.trim().is_empty() {
         return Err(StatusCode::BAD_REQUEST);
     }
+    let room_id = input.room_id.as_deref().map(str::trim).filter(|room| !room.is_empty()).ok_or(StatusCode::BAD_REQUEST)?.to_string();
+    let data = app.data.read().await;
+    rewrite::require_member(&data, &room_id, auth.id)?;
+    drop(data);
     let agreement = Agreement {
         task: input.task.trim().chars().take(100).collect(),
         assignee: if input.assignee.trim().is_empty() {
@@ -1201,6 +1393,8 @@ async fn create_agreement(
         } else {
             input.deadline.trim().chars().take(40).collect()
         },
+        room_id,
+        owner_id: auth.id,
     };
     app.data.write().await.agreements.push(agreement.clone());
     Ok(Json(agreement))
@@ -1226,6 +1420,7 @@ fn default_schedule_fields(creator: &str, date: Option<&str>, place: Option<&str
 }
 async fn create_appointment(
     State(app): State<App>,
+    Extension(auth): Extension<AuthUser>,
     Json(input): Json<NewAppointment>,
 ) -> Result<Json<Appointment>, StatusCode> {
     let NewAppointment { client_id, title, date, place, fields, creator, source_message_id, room_id } = input;
@@ -1233,15 +1428,17 @@ async fn create_appointment(
     if title.is_empty() {
         return Err(StatusCode::BAD_REQUEST);
     }
-    let creator = creator.as_deref().unwrap_or("").trim().chars().take(24).collect::<String>();
+    let _requested_creator = creator;
+    let creator = auth.name.clone();
     let source_message_id = source_message_id.as_deref().map(str::trim).filter(|id| !id.is_empty()).map(str::to_string);
     let fields = schedule_fields(fields.unwrap_or_else(|| default_schedule_fields(&creator, date.as_deref(), place.as_deref())));
     let mut data = app.data.write().await;
     let mut room_id = room_id.as_deref().map(str::trim).filter(|id| !id.is_empty()).map(str::to_string);
+    if let Some(room) = &room_id { rewrite::require_member(&data, room, auth.id)?; }
     let id = client_id.unwrap_or_else(Uuid::new_v4).to_string();
     if let Some(existing) = data.appointments.iter().find(|item| item.id == id ||
         (source_message_id.is_some() && item.source_message_id == source_message_id)) {
-        if existing.creator != creator || existing.source_message_id != source_message_id ||
+        if existing.creator_id != auth.id || existing.creator != creator || existing.source_message_id != source_message_id ||
             (room_id.is_some() && existing.room_id != room_id) {
             return Err(StatusCode::CONFLICT);
         }
@@ -1249,17 +1446,19 @@ async fn create_appointment(
     }
     if let Some(source_id) = &source_message_id {
         let source = data.messages.iter().find(|message| &message.id == source_id).ok_or(StatusCode::NOT_FOUND)?;
-        if source.sender != creator || room_id.as_ref().is_some_and(|room| room != &source.room_id) {
+        if source.sender_id != Some(auth.id) || room_id.as_ref().is_some_and(|room| room != &source.room_id) {
             return Err(StatusCode::BAD_REQUEST);
         }
+        rewrite::require_member(&data, &source.room_id, auth.id)?;
         room_id = Some(source.room_id.clone());
     }
-    let appointment = Appointment { id, title: title.chars().take(80).collect(), fields, creator, source_message_id, room_id };
+    let appointment = Appointment { id, title: title.chars().take(80).collect(), fields, creator, creator_id: auth.id, source_message_id, room_id };
     data.appointments.push(appointment.clone());
     Ok(Json(appointment))
 }
 async fn update_appointment(
     State(app): State<App>,
+    Extension(auth): Extension<AuthUser>,
     Path(id): Path<String>,
     Json(input): Json<UpdateAppointment>,
 ) -> Result<Json<Appointment>, StatusCode> {
@@ -1267,44 +1466,47 @@ async fn update_appointment(
         return Err(StatusCode::BAD_REQUEST);
     }
     let mut data = app.data.write().await;
-    let appointment = data.appointments.iter_mut().find(|appointment| appointment.id == id).ok_or(StatusCode::NOT_FOUND)?;
+    let appointment = data.appointments.iter_mut().find(|appointment| appointment.id == id && appointment.creator_id == auth.id).ok_or(StatusCode::NOT_FOUND)?;
     appointment.title = input.title.trim().chars().take(80).collect();
     appointment.fields = schedule_fields(input.fields);
     Ok(Json(appointment.clone()))
 }
 async fn update_own_appointment(
     State(app): State<App>,
+    Extension(auth): Extension<AuthUser>,
     Path((id, creator)): Path<(String, String)>,
     Json(input): Json<UpdateAppointment>,
 ) -> Result<Json<Appointment>, StatusCode> {
-    if input.title.trim().is_empty() {
+    if input.title.trim().is_empty() || creator != auth.name {
         return Err(StatusCode::BAD_REQUEST);
     }
     let mut data = app.data.write().await;
     let appointment = data
         .appointments
         .iter_mut()
-        .find(|appointment| appointment.id == id && appointment.creator == creator)
+        .find(|appointment| appointment.id == id && appointment.creator_id == auth.id)
         .ok_or(StatusCode::NOT_FOUND)?;
     appointment.title = input.title.trim().chars().take(80).collect();
     appointment.fields = schedule_fields(input.fields);
     Ok(Json(appointment.clone()))
 }
-async fn delete_appointment(State(app): State<App>, Path(id): Path<String>) -> StatusCode {
+async fn delete_appointment(State(app): State<App>, Extension(auth): Extension<AuthUser>, Path(id): Path<String>) -> StatusCode {
     let mut data = app.data.write().await;
     let before = data.appointments.len();
-    data.appointments.retain(|appointment| appointment.id != id);
+    data.appointments.retain(|appointment| !(appointment.id == id && appointment.creator_id == auth.id));
     if data.appointments.len() < before { StatusCode::NO_CONTENT } else { StatusCode::NOT_FOUND }
 }
 async fn delete_own_appointment(
     State(app): State<App>,
+    Extension(auth): Extension<AuthUser>,
     Path((id, creator)): Path<(String, String)>,
 ) -> StatusCode {
+    if creator != auth.name { return StatusCode::FORBIDDEN; }
     let mut data = app.data.write().await;
     let Some(index) = data
         .appointments
         .iter()
-        .position(|appointment| appointment.id == id && appointment.creator == creator)
+        .position(|appointment| appointment.id == id && appointment.creator_id == auth.id)
     else {
         return StatusCode::NOT_FOUND;
     };
@@ -1329,11 +1531,21 @@ async fn prepare_storage() -> Option<PgPool> {
 #[tokio::main]
 async fn main() {
     let db = prepare_storage().await;
-    let test_users = ensure_test_users(db.as_ref()).await.expect("test login accounts must be available");
-    let test_friendships = vec![Friendship { first_id: test_users[0].id, second_id: test_users[1].id }];
+    let test_users = if test_logins_enabled() {
+        ensure_test_users(db.as_ref()).await.expect("test login accounts must be available")
+    } else {
+        Vec::new()
+    };
+    let test_friendships = if test_users.len() == 2 {
+        vec![Friendship { first_id: test_users[0].id, second_id: test_users[1].id }]
+    } else {
+        Vec::new()
+    };
     let app_state = App {
         db,
         deletions: broadcast::channel(256).0,
+        sessions: Arc::new(RwLock::new(HashMap::new())),
+        login_attempts: Arc::new(RwLock::new(HashMap::new())),
         data: Arc::new(RwLock::new(Data {
             users: test_users,
             rooms: vec![],
@@ -1345,10 +1557,9 @@ async fn main() {
             source_cache: HashMap::new(),
         })),
     };
-    let router = Router::new()
-        .route("/api/health", get(health))
-        .route("/api/auth/signup", post(signup))
-        .route("/api/auth/login", post(login))
+    let protected = Router::new()
+        .route("/api/auth/me", get(auth_me))
+        .route("/api/auth/logout", post(logout))
         .route("/api/users", get(users))
         .route("/api/users/{id}/preferences", patch(update_preferences))
         .route("/api/users/{id}/avatar", patch(update_avatar))
@@ -1384,8 +1595,21 @@ async fn main() {
             "/api/rooms/{room_id}/messages/{message_id}",
             delete(delete_message),
         )
-        .with_state(app_state)
-        .fallback_service(ServeDir::new("public"));
+        .route_layer(middleware::from_fn_with_state(app_state.clone(), require_auth));
+    let router = Router::new()
+        .route("/api/health", get(health))
+        .route("/api/config", get(public_config))
+        .route("/api/auth/signup", post(signup))
+        .route("/api/auth/login", post(login))
+        .merge(protected)
+        .fallback_service(ServeDir::new("public"))
+        .layer(SetResponseHeaderLayer::if_not_present(header::X_CONTENT_TYPE_OPTIONS, HeaderValue::from_static("nosniff")))
+        .layer(SetResponseHeaderLayer::if_not_present(header::X_FRAME_OPTIONS, HeaderValue::from_static("DENY")))
+        .layer(SetResponseHeaderLayer::if_not_present(header::REFERRER_POLICY, HeaderValue::from_static("strict-origin-when-cross-origin")))
+        .layer(SetResponseHeaderLayer::if_not_present(HeaderName::from_static("permissions-policy"), HeaderValue::from_static("camera=(), microphone=(), geolocation=()")))
+        .layer(SetResponseHeaderLayer::if_not_present(HeaderName::from_static("content-security-policy"), HeaderValue::from_static("default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'none'")))
+        .layer(SetResponseHeaderLayer::if_not_present(header::STRICT_TRANSPORT_SECURITY, HeaderValue::from_static("max-age=31536000; includeSubDomains")))
+        .with_state(app_state);
     let port = env::var("PORT")
         .unwrap_or_else(|_| "4000".into())
         .parse()
