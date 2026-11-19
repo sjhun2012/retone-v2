@@ -349,8 +349,10 @@ function showCheckResult(result){
     return;
   }
   if(info.level==='check'){
-    removePendingBubble();
-    showSendReview(`<div class="ai-check info"><h2>출처 확인</h2><p>${esc(info.note||'이 내용은 출처와 작성 날짜를 함께 확인해 보면 더 정확하게 전달될 수 있어요.')}</p>${(info.queries||[]).length?`<ul>${info.queries.map(q=>`<li>${esc(q)}</li>`).join('')}</ul>`:''}<div class="modal-actions"><button class="quiet" onclick="editPendingSend()">내용 보완하기</button><button onclick="sendApproved()">이대로 보내기</button></div></div>`);
+    // Source checks should enrich a message, not interrupt the conversation.
+    // sendApproved stores the suggested query so the collapsed source control
+    // can fetch supporting links only when a participant asks to see them.
+    sendApproved();
     return;
   }
   sendApproved();
