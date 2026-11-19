@@ -250,6 +250,70 @@ fn phone_hash(phone: &str) -> String {
             .collect::<String>()
     )
 }
+fn built_in_test_users() -> Vec<DemoUser> {
+    [
+        (Uuid::from_u128(0x7265746f_6e65_0000_0000_000000000001), "신지훈", "01000000000"),
+        (Uuid::from_u128(0x7265746f_6e65_0000_0000_000000000002), "바나나", "01011111111"),
+    ]
+    .into_iter()
+    .map(|(id, name, phone)| {
+        let salt = SaltString::generate(&mut OsRng);
+        let password_hash = Argon2::default()
+            .hash_password(b"111111", &salt)
+            .expect("the built-in test password is valid")
+            .to_string();
+        DemoUser {
+            id,
+            phone_hash: phone_hash(phone),
+            name: name.into(),
+            password_hash,
+            avatar_url: None,
+            status_message: "테스트 계정".into(),
+            ai_intervention: "standard".into(),
+        }
+    })
+    .collect()
+}
+
+async fn ensure_test_users(db: Option<&PgPool>) -> Result<Vec<DemoUser>, sqlx::Error> {
+    let mut users = built_in_test_users();
+    if let Some(db) = db {
+        for user in &mut users {
+            user.id = sqlx::query_scalar(
+                "INSERT INTO retone_v2.users(id,phone_hash,name,password_hash,is_admin,ai_intervention,status_message) \
+                 VALUES($1,$2,$3,$4,FALSE,'standard','테스트 계정') \
+                 ON CONFLICT(phone_hash) DO UPDATE SET name=EXCLUDED.name,password_hash=EXCLUDED.password_hash, \
+                 ai_intervention='standard',status_message='테스트 계정',deleted_at=NULL RETURNING id"
+            )
+            .bind(user.id)
+            .bind(&user.phone_hash)
+            .bind(&user.name)
+            .bind(&user.password_hash)
+            .fetch_one(db)
+            .await?;
+        }
+    }
+    Ok(users)
+}
+
+#[cfg(test)]
+mod shortcut_login_tests {
+    use super::*;
+
+    #[test]
+    fn shortcut_accounts_match_the_buttons() {
+        let users = built_in_test_users();
+        for (user, name, phone) in [
+            (&users[0], "신지훈", "01000000000"),
+            (&users[1], "바나나", "01011111111"),
+        ] {
+            assert_eq!(user.name, name);
+            assert_eq!(user.phone_hash, phone_hash(phone));
+            let parsed = PasswordHash::new(&user.password_hash).unwrap();
+            assert!(Argon2::default().verify_password(b"111111", &parsed).is_ok());
+        }
+    }
+}
 fn ai_level(value: Option<&str>) -> String {
     match value.unwrap_or("standard") {
         "off" | "light" | "standard" | "careful" => value.unwrap_or("standard").to_string(),
@@ -1265,17 +1329,19 @@ async fn prepare_storage() -> Option<PgPool> {
 #[tokio::main]
 async fn main() {
     let db = prepare_storage().await;
+    let test_users = ensure_test_users(db.as_ref()).await.expect("test login accounts must be available");
+    let test_friendships = vec![Friendship { first_id: test_users[0].id, second_id: test_users[1].id }];
     let app_state = App {
         db,
         deletions: broadcast::channel(256).0,
         data: Arc::new(RwLock::new(Data {
-            users: vec![],
+            users: test_users,
             rooms: vec![],
             messages: vec![],
             agreements: vec![],
             appointments: vec![],
             friend_requests: vec![],
-            friendships: vec![],
+            friendships: test_friendships,
             source_cache: HashMap::new(),
         })),
     };
