@@ -132,7 +132,8 @@ mod tests {
 
     fn message(n: usize, room: &str, sender_id: Option<Uuid>, speaker: &str) -> Message {
         Message { id: n.to_string(), room_id: room.into(), sender: speaker.into(), sender_id,
-            body: format!("메시지 {n}"), created: n as i64, mine: false, unread: 0, read_by: vec![] }
+            body: format!("메시지 {n}"), created: n as i64, mine: false, unread: 0, read_by: vec![],
+            reply_to: None, has_sources: false, source_query: None }
     }
 
     #[test]
