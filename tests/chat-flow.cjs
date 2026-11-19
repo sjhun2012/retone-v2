@@ -45,6 +45,20 @@ async function openChat(browser, user, room, errors, mobile = false) {
   return page;
 }
 
+async function verifyQuickLogin(browser, label, expectedName) {
+  const context = await browser.newContext();
+  const page = await context.newPage();
+  page.setDefaultTimeout(15000);
+  const dialogs = [];
+  page.on('dialog', async dialog => { dialogs.push(dialog.message()); await dialog.dismiss(); });
+  await page.goto(base.origin, {waitUntil: 'domcontentloaded'});
+  await page.getByRole('button', {name: label, exact: true}).click();
+  await page.getByRole('heading', {name: '채팅', exact: true}).waitFor();
+  assert.equal(await page.evaluate(() => sessionStorage.getItem('retone-v2-name')), expectedName);
+  assert.deepEqual(dialogs, []);
+  await context.close();
+}
+
 async function send(page, room, text) {
   const sent = page.waitForResponse(response => {
     const request = response.request();
@@ -77,6 +91,8 @@ async function verify() {
   const browser = await chromium.launch({...launch, headless: true});
   try {
     const errors = [];
+    await verifyQuickLogin(browser, '신지훈으로 로그인', '신지훈');
+    await verifyQuickLogin(browser, '바나나로 로그인', '바나나');
     const [sender, peer] = await Promise.all([
       openChat(browser, writer, room, errors), openChat(browser, reader, room, errors, true)
     ]);
