@@ -18,6 +18,24 @@ fn safe_url(url: &str) -> bool {
     url.starts_with("https://") || url.starts_with("http://")
 }
 
+fn clean_summary(input: &str) -> String {
+    let mut text = input.to_string();
+    loop {
+        let Some(open) = text.find('[') else { break; };
+        let Some(label_end) = text[open..].find("](").map(|offset| open + offset) else { break; };
+        let url_start = label_end + 2;
+        let Some(url_end) = text[url_start..].find(')').map(|offset| url_start + offset) else { break; };
+        if !safe_url(&text[url_start..url_end]) {
+            text.replace_range(open..open + 1, "");
+            continue;
+        }
+        let start = if open > 0 && text.as_bytes()[open - 1] == b'(' { open - 1 } else { open };
+        let end = if text.as_bytes().get(url_end + 1) == Some(&b')') { url_end + 2 } else { url_end + 1 };
+        text.replace_range(start..end, "");
+    }
+    text.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
 pub fn parse_web_result(value: &Value) -> Option<SourceInsight> {
     if value["status"] != "completed" || value.get("error").is_some_and(|error| !error.is_null()) {
         return None;
@@ -41,7 +59,7 @@ pub fn parse_web_result(value: &Value) -> Option<SourceInsight> {
             }
         }
     }
-    let summary = text.trim().chars().take(700).collect::<String>();
+    let summary = clean_summary(text.trim()).chars().take(700).collect::<String>();
     if summary.is_empty() || links.is_empty() { None } else { Some(SourceInsight { summary, sources: links }) }
 }
 
@@ -89,5 +107,13 @@ mod tests {
     #[test]
     fn rejects_results_without_real_citations() {
         assert!(parse_web_result(&json!({"status":"completed","output":[{"type":"message","content":[{"type":"output_text","text":"근거 없음","annotations":[]}]}]})).is_none());
+    }
+
+    #[test]
+    fn removes_markdown_citations_when_links_are_shown_separately() {
+        assert_eq!(
+            clean_summary("공전 주기는 약 365.25일입니다. ([NASA](https://nasa.gov/earth)) 계절과도 관련됩니다. ([백과](https://example.org))"),
+            "공전 주기는 약 365.25일입니다. 계절과도 관련됩니다."
+        );
     }
 }
