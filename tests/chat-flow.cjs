@@ -124,11 +124,12 @@ async function verify() {
       const payload = route.request().postDataJSON();
       if (payload.text !== claimText) return route.fallback();
       await route.fulfill({status: 200, contentType: 'application/json', body: JSON.stringify({
-        verdict: 'PASS', suggestion: null, info: {level: 'none', note: null, queries: ['지구 태양 공전 주기']}, source: 'ai'
+        verdict: 'PASS', suggestion: null, info: {level: 'check', note: '출처와 발표 날짜를 확인해 주세요.', queries: ['지구 태양 공전 주기']}, source: 'ai'
       })});
     });
     const claim = await send(sender, room, claimText);
     await sender.unroute('**/api/ai/check');
+    assert.equal(await sender.getByRole('heading', {name: '출처 확인'}).count(), 0);
     await bubble(peer, claim).waitFor();
     const sourceToggle = bubble(peer, claim).getByRole('button', {name: '출처 보기'});
     assert.equal(await sourceToggle.textContent(), '⌄');
