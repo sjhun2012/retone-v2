@@ -12,6 +12,14 @@ function decorateChatLayout() {
   const layout=document.querySelector('#app > .layout');
   if(!layout||layout.classList.contains('redesigned'))return;
   layout.classList.add('redesigned');
+  for (const row of layout.querySelectorAll('.rooms [data-room-id]')) {
+    const room = accessibleRooms().find(item => item.id === row.dataset.roomId);
+    if (room?.last && room.updated) {
+      const time = document.createElement('time');
+      time.className = 'room-last-time'; time.textContent = messageTime(room.updated);
+      row.append(time);
+    }
+  }
   const chat=layout.querySelector(':scope > .chat');
   if(!chat) {
     if(nav==='chat') { const empty=document.createElement('section'); empty.className='desktop-welcome'; empty.innerHTML='<div class="welcome-mark">◌</div><h2>대화를 선택해 주세요</h2>'; layout.append(empty); }
@@ -28,6 +36,7 @@ function decorateChatLayout() {
     const avatar=document.createElement('span'); avatar.className='avatar'; avatar.textContent=name.charAt(0);
     const copy=document.createElement('span'); copy.className='copy'; const title=document.createElement('b'); title.textContent=name;
     const last=document.createElement('span'); last.textContent=room.last||''; copy.append(title,last); button.append(avatar,copy);
+    if(room.last && room.updated) { const time=document.createElement('time'); time.className='room-last-time'; time.textContent=messageTime(room.updated); button.append(time); }
     button.addEventListener('click',()=>openRoom(room.id)); items.append(button);
   }
   search.addEventListener('input',()=>{ for(const item of items.children)item.hidden=!item.dataset.search.includes(search.value.trim().toLowerCase()); });
@@ -37,6 +46,17 @@ function decorateChatLayout() {
   const people=document.createElement('p'); people.textContent=room?roomPeople(room).join(', '):'';
   const schedules=document.createElement('button'); schedules.type='button'; schedules.textContent='일정 전체 보기'; schedules.addEventListener('click',()=>{if(roomId)showRoomSchedules(roomId)});
   details.append(title,sub,people,schedules); chat.after(details);
+  const form=chat.querySelector('.sendbar'), input=chat.querySelector('#text');
+  if(form&&input) {
+    const trigger=document.createElement('button'); trigger.type='button'; trigger.className='emoji-trigger'; trigger.setAttribute('aria-label','이모티콘'); trigger.textContent='☺';
+    const picker=document.createElement('div'); picker.className='emoji-picker'; picker.hidden=true; picker.setAttribute('aria-label','이모티콘 선택');
+    for(const emoji of ['😀','😊','😂','🥰','😍','🥹','😅','😭','😮','😢','😡','👍','👏','🙏','❤️','🎉']) {
+      const option=document.createElement('button'); option.type='button'; option.textContent=emoji; option.setAttribute('aria-label',emoji);
+      option.addEventListener('click',()=>{ const start=input.selectionStart ?? input.value.length, end=input.selectionEnd ?? start; input.setRangeText(emoji,start,end,'end'); input.dispatchEvent(new Event('input',{bubbles:true})); input.focus(); picker.hidden=true; trigger.setAttribute('aria-expanded','false'); }); picker.append(option);
+    }
+    trigger.setAttribute('aria-expanded','false'); trigger.addEventListener('click',()=>{picker.hidden=!picker.hidden; trigger.setAttribute('aria-expanded',String(!picker.hidden));});
+    form.insertBefore(trigger,input); form.append(picker);
+  }
 }
 new MutationObserver(decorateChatLayout).observe(document.querySelector('#app'),{childList:true});
 decorateChatLayout();
