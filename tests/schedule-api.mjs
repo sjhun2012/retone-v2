@@ -19,7 +19,7 @@ export async function verifyScheduleApi(base, message, writer, reader) {
   let response = await post(path, 'POST', {...payload, creator: message.sender + ' (상대)'}, reader);
   assert.equal(response.status, 400, 'Peer cannot save a proposal on another author’s source');
   response = await post(path, 'POST', {...payload, room_id: randomUUID()});
-  assert.equal(response.status, 400, 'Cannot assign a source message to another room');
+  assert.equal(response.status, 404, 'A nonexistent room must not accept a source message');
   response = await post(path, 'POST', {...payload, source_message_id: randomUUID()});
   assert.equal(response.status, 404, 'Cannot create a card from an absent source');
 
