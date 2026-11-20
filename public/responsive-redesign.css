@@ -40,3 +40,69 @@
   .redesigned-chat .messages { padding:18px 14px; }
   .redesigned-chat .sendbar { padding-bottom:calc(10px + env(safe-area-inset-bottom)); }
 }
+
+/* Re:Tone — redesigned shell */
+.new-auth { background:#f5f0eb; padding:24px; }
+.new-auth .auth-card { width:min(440px,100%); padding:42px; background:#fffdfa; border:1px solid #eadfd6; border-radius:16px; box-shadow:0 18px 60px #674c3612; }
+.new-auth .auth-brand { margin:0 0 30px; font-size:30px; letter-spacing:-1.5px; color:#3a2d26; }
+.new-auth .auth-tabs { border-radius:4px; background:transparent; border-bottom:1px solid #e8ddd5; padding:0; margin-bottom:26px; }
+.new-auth .auth-tabs button { border-radius:0; color:#9a8b80; padding:12px; }
+.new-auth .auth-tabs button.selected { color:#48372c; background:transparent; box-shadow:inset 0 -2px #806654; }
+.new-auth h1 { font-size:22px; margin:0 0 22px; color:#302823; }
+.new-auth label { color:#685a50; font-size:13px; margin:16px 0 0; }
+.new-auth input:not([type=checkbox]) { height:48px; background:#fff; border:1px solid #e3d8cf; border-radius:8px; padding:0 14px; color:#302823; }
+.new-auth .auth-submit { background:#826957; border-radius:8px; height:48px; margin-top:24px; }
+.new-auth .ai-policy-link { background:#f5eee8; color:#705746; }
+.new-auth .consent input { width:auto; }
+.new-auth .test-login-shortcuts { background:#faf7f4; border-color:#eee5dd; }
+.new-auth .test-login-shortcuts button { background:#eee4dc!important; color:#705746!important; }
+.redesigned .rail { background:#f8f4f0; border-color:#e9e0d9; }
+.redesigned .rail-icon { font-size:25px; line-height:1; }
+.redesigned .rail-label { display:none; }
+.redesigned .rail nav button { position:relative; display:flex; align-items:center; gap:12px; justify-content:center; color:#705a4a; }
+.redesigned .rail small { overflow:hidden; text-overflow:ellipsis; }
+.redesigned .page { background:#fffdfa; }
+.redesigned .page .head { border-bottom:1px solid #eadfd7; }
+.redesigned .room { border-bottom:1px solid #eee7e2; padding:15px 8px; }
+.redesigned .room:hover { background:#f8f3ef; transform:none; }
+.redesigned .chat-head { gap:12px; }
+.redesigned .chat-head h1 { color:#302823; }
+.redesigned .messages { padding:24px 32px; }
+.redesigned .bubble { padding:12px 15px; border-radius:10px; color:#302823; line-height:1.55; }
+.redesigned .bubble.mine { border-radius:10px; }
+.redesigned .sendbar { padding:14px 22px; }
+.redesigned .sendbar input { height:48px; border-radius:9px; }
+.redesigned .sendbar button[type=submit] { height:48px; border-radius:9px; }
+.desktop-welcome { display:none; }
+.room-search { width:100%; padding:11px 12px; margin:2px 0 12px; border:1px solid #e5d9cf; border-radius:8px; background:#faf7f4; outline:0; }
+.redesign-room[hidden] { display:none; }
+.redesign-room-list h2 { font-size:21px; }
+.redesign-rooms { overflow:auto; }
+@media (min-width:1100px) {
+  .redesigned.layout { grid-template-columns:100px minmax(290px,340px) minmax(0,1fr); height:100dvh; }
+  .redesigned .rail { padding:24px 10px; }
+  .redesigned .rail .brand { font-size:16px; letter-spacing:-1px; margin:0 0 34px; text-align:center; }
+  .redesigned .rail nav button { height:54px; border-radius:10px; }
+  .redesigned .page { min-width:0; border-right:1px solid var(--line); }
+  .redesigned .page .content { padding:12px 16px; overflow:auto; }
+  .desktop-welcome { display:grid; place-content:center; text-align:center; color:#9a8a7e; background:#faf7f4; }
+  .desktop-welcome h2 { font-size:16px; font-weight:500; }
+  .welcome-mark { font-size:52px; color:#c6b5a7; }
+  .redesigned-chat.layout { grid-template-columns:100px minmax(290px,340px) minmax(0,1fr); }
+  .redesign-room-list { padding:24px 15px; }
+}
+@media (min-width:701px) and (max-width:1099px) {
+  .redesigned-chat .rail nav button { justify-content:flex-start; }
+  .redesigned-chat .rail-icon { font-size:19px; }
+  .redesigned-chat .rail-label { display:inline; }
+  .redesigned-chat .messages { padding:24px; }
+  .redesign-details { background:#fffdfa; }
+}
+@media (max-width:700px) {
+  .new-auth { display:flex; align-items:center; padding:20px; }
+  .new-auth .auth-card { padding:30px 24px; box-shadow:none; }
+  .redesigned .messages { padding:16px 14px; }
+  .redesigned .sendbar { padding:10px 12px calc(10px + env(safe-area-inset-bottom)); }
+  .redesigned .sendbar input { height:44px; }
+  .redesigned .sendbar button[type=submit] { height:44px; }
+}
