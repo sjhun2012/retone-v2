@@ -79,6 +79,13 @@
 .room-last-time { align-self:flex-start; flex:none; padding-top:3px; color:#94867c; font-size:11px; white-space:nowrap; }
 .redesigned .bubble, .redesigned .bubble.mine { border-radius:10px; padding:12px 14px; }
 .redesigned .bubble.mine { background:#eee1d5; border:1px solid #e6d3c3; }
+.redesigned .bubble { position:relative; max-width:min(70%, calc(100% - 120px)); overflow:visible; }
+.redesigned .bubble.peer { margin:32px 76px 12px 52px; }
+.redesigned .bubble.mine { margin:12px 0 12px auto; }
+.redesigned .message-sender { position:absolute; bottom:calc(100% + 5px); left:0; color:#66594f; font-size:12px; line-height:16px; white-space:nowrap; }
+.redesigned .message-avatar { top:-20px; left:-48px; width:38px; height:38px; border-radius:50%; background:#eee1d6; color:#765b49; }
+.redesigned .bubble-time { position:absolute; bottom:2px; left:calc(100% + 6px); color:#8c7e74; font-size:10px; line-height:1.2; white-space:nowrap; }
+.redesigned .bubble.mine .bubble-time { left:auto; right:calc(100% + 6px); }
 .redesigned .meta { display:flex; gap:6px; margin-bottom:6px; font-size:11px; }
 .redesigned .sendbar .emoji-trigger { flex:none; width:40px; height:44px; padding:0; background:transparent; color:#806a5b; font-size:24px; }
 .emoji-picker { position:absolute; bottom:calc(100% + 8px); left:16px; display:grid; grid-template-columns:repeat(8,1fr); gap:3px; padding:8px; border:1px solid #e6d9ce; border-radius:12px; background:#fffdfa; box-shadow:0 8px 24px #3826171f; z-index:3; }
