@@ -144,7 +144,7 @@ struct LoginAttempt {
     blocked_until: i64,
 }
 #[derive(Clone)]
-pub(super) struct AuthUser {
+struct AuthUser {
     id: Uuid,
     name: String,
 }
@@ -559,8 +559,9 @@ async fn login(
         return Err(StatusCode::UNAUTHORIZED);
     }
     app.login_attempts.write().await.remove(&attempt_key);
-    let user = user_out(row.0, row.1, row.2, row.4, row.5);
-    let token = create_session(&app, user.id, &user.name).await;
+    let user_id = row.0;
+    let user = user_out(user_id, row.1, row.2, row.4, row.5);
+    let token = create_session(&app, user_id, &user.name).await;
     Ok(login_response(user, &token))
 }
 async fn users(State(app): State<App>, Extension(auth): Extension<AuthUser>) -> Result<Json<Vec<PublicUser>>, StatusCode> {
