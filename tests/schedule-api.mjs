@@ -2,9 +2,9 @@ import assert from 'node:assert/strict';
 import {randomUUID} from 'node:crypto';
 
 // Called with a message from the disposable room in the live regression test.
-export async function verifyScheduleApi(base, message) {
-  const post = (path, method, body) => fetch(new URL(path, base), {
-    method, headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)
+export async function verifyScheduleApi(base, message, writer, reader) {
+  const post = (path, method, body, user=writer) => fetch(new URL(path, base), {
+    method, headers: {'Content-Type': 'application/json', Cookie:user.cookie}, body: JSON.stringify(body)
   });
   const payload = {
     client_id: randomUUID(), creator: message.sender, room_id: message.room_id,
@@ -16,10 +16,10 @@ export async function verifyScheduleApi(base, message) {
     ]
   };
   const path = '/api/appointments';
-  let response = await post(path, 'POST', {...payload, creator: message.sender + ' (상대)'});
+  let response = await post(path, 'POST', {...payload, creator: message.sender + ' (상대)'}, reader);
   assert.equal(response.status, 400, 'Peer cannot save a proposal on another author’s source');
   response = await post(path, 'POST', {...payload, room_id: randomUUID()});
-  assert.equal(response.status, 400, 'Cannot assign a source message to another room');
+  assert.equal(response.status, 404, 'A nonexistent room must not accept a source message');
   response = await post(path, 'POST', {...payload, source_message_id: randomUUID()});
   assert.equal(response.status, 404, 'Cannot create a card from an absent source');
 
@@ -38,11 +38,11 @@ export async function verifyScheduleApi(base, message) {
   const edit = {title: '토요일 영화', fields: [{label: '할일', value: '영화 보기'}, {label: '언제', value: '토요일'}, {label: '메모', value: ''}]};
   response = await post(ownerPath, 'PATCH', edit);
   assert.equal(response.status, 200);
-  response = await fetch(new URL('/api/bootstrap', base));
+  response = await fetch(new URL('/api/bootstrap', base), {headers:{Cookie:writer.cookie}});
   const sameSource = (await response.json()).appointments.filter(card => card.source_message_id === message.id);
   assert.equal(sameSource.length, 1);
   assert.equal(sameSource[0].title, edit.title);
   assert.deepEqual(fields(sameSource[0]), edit.fields, 'Bootstrap returned stale or truncated details');
-  assert.equal((await fetch(new URL(ownerPath, base), {method: 'DELETE'})).status, 204);
+  assert.equal((await fetch(new URL(ownerPath, base), {method: 'DELETE', headers:{Cookie:writer.cookie}})).status, 204);
   console.log('Schedule API: author, room, source, idempotency, saved details and updates passed');
 }

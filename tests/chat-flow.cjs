@@ -6,26 +6,37 @@ const base = new URL(process.env.RETONE_TEST_URL || 'http://127.0.0.1:4000');
 assert.ok(base.protocol === 'http:' && ['localhost', '127.0.0.1', '[::1]'].includes(base.hostname),
   'Run only against a disposable local Re:Tone server');
 
-async function post(path, body) {
+async function request(path, {method = 'GET', body, user} = {}) {
   const response = await fetch(new URL(path, base), {
-    method: 'POST', headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify(body), redirect: 'error'
+    method, headers: {'Content-Type': 'application/json', ...(user ? {Cookie: user.cookie} : {})},
+    body: body === undefined ? undefined : JSON.stringify(body), redirect: 'error'
   });
+  return response;
+}
+
+async function post(path, body, user) {
+  const response = await request(path, {method: 'POST', body, user});
   assert.ok(response.ok, `Fixture ${path} returned ${response.status}`);
   return response.json();
 }
 
 async function signup(prefix) {
-  return post('/api/auth/signup', {
-    name: prefix + randomUUID().slice(0, 8), phone: '010' + randomInt(10000000, 100000000),
+  const phone = '010' + randomInt(10000000, 100000000);
+  const response = await request('/api/auth/signup', {method:'POST', body:{
+    name: prefix + randomUUID().slice(0, 8), phone,
     password: randomUUID(), ai_intervention: 'standard'
-  });
+  }});
+  assert.ok(response.ok, `Signup returned ${response.status}`);
+  const user = await response.json();
+  return {...user, phone, cookie: response.headers.get('set-cookie').split(';')[0]};
 }
 
 async function openChat(browser, user, room, errors, mobile = false) {
   const context = await browser.newContext(mobile
     ? {viewport: {width: 390, height: 844}, isMobile: true, hasTouch: true}
     : {});
+  const [cookieName, cookieValue] = user.cookie.split('=');
+  await context.addCookies([{name:cookieName, value:cookieValue, url:base.origin, httpOnly:true, sameSite:'Strict'}]);
   await context.addInitScript(account => {
     sessionStorage.setItem('retone-v2-name', account.name);
     sessionStorage.setItem('retone-v2-user-id', account.id);
@@ -82,11 +93,17 @@ async function send(page, room, text) {
 function bubble(page, message) { return page.locator(`[data-message-id="${message.id}"]`); }
 
 async function verify() {
+  assert.equal((await request('/api/users')).status, 401, 'Protected APIs reject anonymous callers');
   const [writer, reader] = await Promise.all([signup('작성자'), signup('수신자')]);
+  await post('/api/friend-requests', {sender_id: reader.id, phone: reader.phone}, writer);
+  const pending = await (await request(`/api/friends/${reader.id}/requests`, {user:reader})).json();
+  await post(`/api/friend-requests/${pending[0].id}/accept/${reader.id}`, {}, reader);
+  assert.equal((await request(`/api/friends/${reader.id}`, {user:writer})).status, 403,
+    'A valid session cannot read another account by changing the URL');
   const room = await post('/api/rooms', {
     name: '일정과 삭제 회귀 검사', owner: writer.name, owner_id: writer.id,
     members: [reader.name], member_ids: [reader.id]
-  });
+  }, writer);
   const launch = process.env.CHROME_PATH ? {executablePath: process.env.CHROME_PATH} : {channel: 'chrome'};
   const browser = await chromium.launch({...launch, headless: true});
   try {
@@ -109,6 +126,11 @@ async function verify() {
       }).observe(document.body, {childList: true, subtree: true});
     });
     const invite = await send(sender, room, '야 내일 만날래?');
+    const forged = await post(`/api/rooms/${room.id}/messages`, {sender: reader.name, sender_id: reader.id, body: '서버 인증 검사'}, writer);
+    assert.equal(forged.sender_id, writer.id);
+    assert.equal(forged.sender, writer.name);
+    assert.equal((await request(`/api/rooms/${room.id}/messages/${forged.id}`, {method:'DELETE', user:reader})).status, 403,
+      'A room member cannot delete another sender’s message');
     const offer = bubble(sender, invite).getByRole('button', {name: '일정 카드 쓰기'});
     await offer.waitFor();
     await bubble(peer, invite).waitFor();
@@ -212,11 +234,12 @@ async function verify() {
     assert.equal(await peer.locator('[data-schedule-offer]').count(), 0);
     assert.deepEqual(errors, []);
     const {verifyScheduleApi} = await import('./schedule-api.mjs');
-    const secondInvite = await post(`/api/rooms/${room.id}/messages`, {sender: writer.name, body: '금요일 영화 보자.'});
-    await verifyScheduleApi(base, secondInvite);
+    const secondInvite = await post(`/api/rooms/${room.id}/messages`, {sender: reader.name, sender_id: reader.id, body: '금요일 영화 보자.'}, writer);
+    assert.equal(secondInvite.sender, writer.name);
+    await verifyScheduleApi(base, secondInvite, writer, reader);
     await require('./rewrite-flow.cjs')({sender, peer, writer, reader, room, base, post, send});
     assert.deepEqual(errors, []);
-    console.log('Two real browser sessions passed: sender-only offer, both replies, edited details in peer view, and push deletion with polling blocked.');
+    console.log('Two real browser sessions passed: server sessions, anti-impersonation, access control, sender-only offer, replies, details, and push deletion.');
   } finally { await browser.close(); }
 }
 
