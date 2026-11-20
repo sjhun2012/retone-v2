@@ -76,6 +76,14 @@
 .desktop-welcome { display:none; }
 .room-search { width:100%; padding:11px 12px; margin:2px 0 12px; border:1px solid #e5d9cf; border-radius:8px; background:#faf7f4; outline:0; }
 .redesign-room[hidden] { display:none; }
+.room-last-time { align-self:flex-start; flex:none; padding-top:3px; color:#94867c; font-size:11px; white-space:nowrap; }
+.redesigned .bubble, .redesigned .bubble.mine { border-radius:10px; padding:12px 14px; }
+.redesigned .bubble.mine { background:#eee1d5; border:1px solid #e6d3c3; }
+.redesigned .meta { display:flex; gap:6px; margin-bottom:6px; font-size:11px; }
+.redesigned .sendbar .emoji-trigger { flex:none; width:40px; height:44px; padding:0; background:transparent; color:#806a5b; font-size:24px; }
+.emoji-picker { position:absolute; bottom:calc(100% + 8px); left:16px; display:grid; grid-template-columns:repeat(8,1fr); gap:3px; padding:8px; border:1px solid #e6d9ce; border-radius:12px; background:#fffdfa; box-shadow:0 8px 24px #3826171f; z-index:3; }
+.emoji-picker[hidden] { display:none; }
+.redesigned .sendbar .emoji-picker button { width:36px; height:36px; padding:0; background:transparent; font-size:21px; }
 .redesign-room-list h2 { font-size:21px; }
 .redesign-rooms { overflow:auto; }
 @media (min-width:1100px) {
