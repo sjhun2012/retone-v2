@@ -211,7 +211,6 @@
     const chat = document.querySelector('.chat');
     if (chat && roomId) {
       addMediaControls();
-      if (mediaRoomId !== roomId) startInvitePolling(roomId);
     } else if (mediaRoomId) {
       endCall();
       stopInvitePolling();
@@ -219,9 +218,6 @@
   };
   if (appRoot) {
     syncMediaUi();
-    // Keep the enhancement passive: observing every message mutation can race
-    // with the AI review/send flow. A short-lived poll only checks for a newly
-    // opened chat and never touches the message list itself.
-    setInterval(syncMediaUi, 600);
+    appRoot.addEventListener('click', () => setTimeout(syncMediaUi, 0), true);
   }
 })();
