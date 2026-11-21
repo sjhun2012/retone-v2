@@ -74,6 +74,8 @@ async function send(page, room, text) {
   page.once('pageerror', error => console.log(`[pageerror] ${error.stack || error.message}`));
   page.once('console', message => { if (message.type() === 'error') console.log(`[pageconsole] ${message.text()}`); });
   page.once('requestfailed', request => console.log(`[requestfailed] ${request.method()} ${request.url()} ${request.failure()?.errorText || ''}`));
+  page.on('request', request => { if (request.method() === 'POST' && request.url().includes('/messages')) console.log(`[request] ${request.url()} ${request.postData()}`); });
+  page.on('response', response => { if (response.request().method() === 'POST' && response.url().includes('/messages')) console.log(`[response] ${response.status()} ${response.url()}`); });
   const sent = page.waitForResponse(response => {
     const request = response.request();
     return request.method() === 'POST' && new URL(response.url()).pathname === `/api/rooms/${room.id}/messages`
