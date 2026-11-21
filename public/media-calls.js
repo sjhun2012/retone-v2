@@ -224,7 +224,10 @@
     }
   };
   if (appRoot) {
-    new MutationObserver(syncMediaUi).observe(appRoot, { childList: true, subtree: true });
     syncMediaUi();
+    // Keep the enhancement passive: observing every message mutation can race
+    // with the AI review/send flow. A short-lived poll only checks for a newly
+    // opened chat and never touches the message list itself.
+    setInterval(syncMediaUi, 600);
   }
 })();
