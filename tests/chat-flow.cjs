@@ -71,9 +71,6 @@ async function verifyQuickLogin(browser, label, expectedName) {
 }
 
 async function send(page, room, text) {
-  page.on('console', message => { if (message.type() === 'error') console.log(`[pageconsole] ${message.text()}`); });
-  page.on('request', request => { if (request.method() === 'POST' && request.url().includes('/messages')) console.log(`[request] ${request.url()} ${request.postData()}`); });
-  page.on('response', response => { if (response.request().method() === 'POST' && response.url().includes('/messages')) console.log(`[response] ${response.status()} ${response.url()}`); });
   const sent = page.waitForResponse(response => {
     const request = response.request();
     return request.method() === 'POST' && new URL(response.url()).pathname === `/api/rooms/${room.id}/messages`

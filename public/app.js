@@ -205,7 +205,6 @@ async function refreshInbox(loadRooms=true){if(!signedIn||inboxSyncing)return;in
 async function openRoom(id){roomId=id;if(!data)data=await api('/api/bootstrap');const room=data.rooms.find(item=>item.id===id);if(!room)return home();const messages=await api(`/api/rooms/${id}/messages`);roomMessages=messages.slice();await api(`/api/rooms/${id}/read`,{method:'POST',body:JSON.stringify({reader:signedIn})});markMessagesRead(messages);unreadCounts[id]=0;const names=['나',...(room.participant_names||[])].join(', ');app.innerHTML=`<main class="layout android-layout">${rail()}<section class="chat"><header class="head chat-head"><button class="back" onclick="home()">‹</button><div class="room-title"><h1>${esc(room.name)}</h1><span>${esc(names)} · ${room.members}명</span></div><div class="chat-actions"><button onclick="inviteFriends()">＋ 초대</button><button onclick="newAgreement()">✓</button></div></header><section class="messages" id="messages">${messages.map(view).join('')}${data.agreements.slice(0,1).map(agreement=>`<article class="agreement"><b>✓ 공동 확인 · ${esc(agreement.task)}</b><small>담당 ${esc(agreement.assignee)} · ${esc(agreement.deadline)}</small></article>`).join('')}</section><form class="sendbar" onsubmit="send(event)"><input id="text" placeholder="메시지를 입력하세요" autocomplete="off" oninput="queueAiCheck(this.value)"><span id="ai-status" class="ai-status"></span><button aria-label="보내기">↑</button></form></section></main>`;const list=document.querySelector('#messages');list.scrollTop=list.scrollHeight;document.querySelector('#text')?.focus();updateUnreadUi();startInboxPolling()}
 async function sendApproved(){
   const next=pendingSend;
-  console.error('retone-send-approved',Boolean(next),next?.body||'');
   if(!next)return;
   pendingSend=null;
   if(!isCurrentSendSession(next))return;
@@ -227,7 +226,6 @@ function isCurrentSendSession(view){
   // The room/user boundary is safe to retain even if a responsive enhancement
   // replaced the message list while the AI check was in flight.
   const current=nav==='chat' && view.userId===signedInId && view.room===roomId && Boolean(document.querySelector('.chat #messages'));
-  if(!current)console.error('retone-send-view-mismatch',JSON.stringify({nav,viewUser:view.userId,sessionUser:signedInId,viewRoom:view.room,roomId,hasMessages:Boolean(document.querySelector('.chat #messages'))}));
   return current;
 }
 
@@ -246,9 +244,8 @@ function offerScheduleOnMessage(view,message,proposal){
 }
 
 async function sendChatMessage(room,body,{sourceQuery=null,replyToId=null}={}){
-  console.error('retone-send-chat',room,body);
   const view={room,userId:signedInId,list:document.querySelector('.chat #messages')};
-  if(!isCurrentSendView(view)){console.error('retone-send-chat-blocked');return;}
+  if(!isCurrentSendView(view))return;
   const input=document.querySelector('#text');
   const sender=signedIn;
   // Each result belongs to one outgoing message. A draft, reply, or later room
@@ -340,7 +337,6 @@ function applyPendingSuggestion(){
   input.focus();
 }
 function showCheckResult(result){
-  console.error('retone-check-result',JSON.stringify(result),Boolean(pendingSend));
   if(!pendingSend)return;
   pendingSend.result=result;
   const info=result.info||{level:'none',queries:[]};

@@ -1,8 +1,6 @@
 (() => {
   const MAX_FILE_BYTES = 8 * 1024 * 1024;
   const originalView = window.view;
-  const originalOpenRoom = window.openRoom;
-  const originalHome = window.home;
   let mediaRoomId = null;
   let recorder = null;
   let recorderStream = null;
@@ -214,10 +212,19 @@
   window.rejectIncomingCall = rejectIncomingCall;
   window.endCall = endCall;
 
-  if (typeof originalOpenRoom === 'function') {
-    window.openRoom = async function mediaOpenRoom(id) { if (activeCall && mediaRoomId !== id) endCall(); const result = await originalOpenRoom(id); addMediaControls(); startInvitePolling(id); return result; };
-  }
-  if (typeof originalHome === 'function') {
-    window.home = async function mediaHome(...args) { endCall(); stopInvitePolling(); return originalHome(...args); };
+  const appRoot = document.querySelector('#app');
+  const syncMediaUi = () => {
+    const chat = document.querySelector('.chat');
+    if (chat && roomId) {
+      addMediaControls();
+      if (mediaRoomId !== roomId) startInvitePolling(roomId);
+    } else if (mediaRoomId) {
+      endCall();
+      stopInvitePolling();
+    }
+  };
+  if (appRoot) {
+    new MutationObserver(syncMediaUi).observe(appRoot, { childList: true, subtree: true });
+    syncMediaUi();
   }
 })();
