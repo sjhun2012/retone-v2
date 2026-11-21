@@ -72,6 +72,7 @@ async function verifyQuickLogin(browser, label, expectedName) {
 
 async function send(page, room, text) {
   if (text === '?') {
+    await page.evaluate(() => document.addEventListener('click', event => console.log(`[debug-click] ${event.target?.outerHTML?.slice(0,180)}`), {capture:true}));
     page.on('console', message => console.log(`[debug-console] ${message.type()} ${message.text()}`));
     page.on('request', request => { if (request.method() === 'POST' || request.url().includes('call-invites')) console.log(`[debug-request] ${request.method()} ${request.url()} ${request.postData() || ''}`); });
     page.on('response', response => { if (response.request().method() === 'POST' || response.url().includes('call-invites')) console.log(`[debug-response] ${response.status()} ${response.url()}`); });
