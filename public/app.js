@@ -246,8 +246,9 @@ function offerScheduleOnMessage(view,message,proposal){
 }
 
 async function sendChatMessage(room,body,{sourceQuery=null,replyToId=null}={}){
+  console.error('retone-send-chat',room,body);
   const view={room,userId:signedInId,list:document.querySelector('.chat #messages')};
-  if(!isCurrentSendView(view))return;
+  if(!isCurrentSendView(view)){console.error('retone-send-chat-blocked');return;}
   const input=document.querySelector('#text');
   const sender=signedIn;
   // Each result belongs to one outgoing message. A draft, reply, or later room
