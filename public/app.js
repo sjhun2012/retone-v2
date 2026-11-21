@@ -225,8 +225,9 @@ function isCurrentSendView(view){
 function isCurrentSendSession(view){
   // The room/user boundary is safe to retain even if a responsive enhancement
   // replaced the message list while the AI check was in flight.
-  return nav==='chat' && view.userId===signedInId && view.room===roomId &&
-    Boolean(document.querySelector('.chat #messages'));
+  const current=nav==='chat' && view.userId===signedInId && view.room===roomId && Boolean(document.querySelector('.chat #messages'));
+  if(!current)console.error('retone-send-view-mismatch',JSON.stringify({nav,viewUser:view.userId,sessionUser:signedInId,viewRoom:view.room,roomId,hasMessages:Boolean(document.querySelector('.chat #messages'))}));
+  return current;
 }
 
 function offerScheduleOnMessage(view,message,proposal){
