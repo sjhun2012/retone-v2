@@ -54,6 +54,18 @@ struct Message {
     has_sources: bool,
     #[serde(skip_serializing)]
     source_query: Option<String>,
+    #[serde(skip_serializing)]
+    likes: Vec<Uuid>,
+}
+#[derive(Serialize)]
+struct MessageView {
+    #[serde(flatten)]
+    message: Message,
+    like_count: usize,
+    liked_by_me: bool,
+}
+fn message_view(message: &Message, user_id: Uuid) -> MessageView {
+    MessageView { message: message.clone(), like_count: message.likes.len(), liked_by_me: message.likes.contains(&user_id) }
 }
 #[derive(Clone, Serialize)]
 struct ReplyPreview {
@@ -1126,14 +1138,14 @@ struct DataOut {
     agreements: Vec<Agreement>,
     appointments: Vec<Appointment>,
 }
-async fn messages(State(app): State<App>, Extension(auth): Extension<AuthUser>, Path(id): Path<String>) -> Result<Json<Vec<Message>>, StatusCode> {
+async fn messages(State(app): State<App>, Extension(auth): Extension<AuthUser>, Path(id): Path<String>) -> Result<Json<Vec<MessageView>>, StatusCode> {
     let d = app.data.read().await;
     rewrite::require_member(&d, &id, auth.id)?;
     Ok(Json(
         d.messages
             .iter()
             .filter(|m| m.room_id == id)
-            .cloned()
+            .map(|message| message_view(message, auth.id))
             .collect(),
     ))
 }
@@ -1185,6 +1197,7 @@ async fn send(
         reply_to,
         has_sources: source_query.is_some(),
         source_query,
+        likes: vec![],
     };
     d.messages.push(message.clone());
     if let Some(room) = d.rooms.iter_mut().find(|r| r.id == id) {
@@ -1192,6 +1205,21 @@ async fn send(
         room.updated = message.created;
     }
     Ok(Json(message))
+}
+
+#[derive(Deserialize)]
+struct LikeRequest { liked: bool }
+
+async fn set_message_like(
+    State(app): State<App>, Extension(auth): Extension<AuthUser>,
+    Path((room_id, message_id)): Path<(String, String)>, Json(input): Json<LikeRequest>,
+) -> Result<Json<MessageView>, StatusCode> {
+    let mut data = app.data.write().await;
+    rewrite::require_member(&data, &room_id, auth.id)?;
+    let message = data.messages.iter_mut().find(|m| m.room_id == room_id && m.id == message_id).ok_or(StatusCode::NOT_FOUND)?;
+    message.likes.retain(|id| *id != auth.id);
+    if input.liked { message.likes.push(auth.id); }
+    Ok(Json(message_view(message, auth.id)))
 }
 
 async fn message_sources(
@@ -1588,6 +1616,7 @@ async fn main() {
         .route("/api/appointments/{id}", patch(update_appointment).delete(delete_appointment))
         .route("/api/appointments/{id}/creator/{creator}", patch(update_own_appointment).delete(delete_own_appointment))
         .route("/api/rooms/{id}/messages", get(messages).post(send))
+        .route("/api/rooms/{room_id}/messages/{message_id}/like", post(set_message_like))
         .route("/api/messages/{message_id}/sources", post(message_sources))
         .route("/api/rooms/{id}/rewrite", post(rewrite::in_room))
         .route("/api/rooms/{id}/message-events", get(room_message_events))

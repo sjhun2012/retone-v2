@@ -179,6 +179,7 @@ function reconcileRoomMessages(feed, request, messages) {
   }
   if (nearBottom) list.scrollTop = list.scrollHeight;
   updateReadReceipts(roomMessages);
+  updateMessageLikes(roomMessages);
   updateRewriteContext(request);
   return true;
 }
@@ -488,7 +489,26 @@ function view(message){
   const mine=isMyMessage(message),user=userProfilesByName[message.sender],avatar=user?.avatar_url||userAvatarByName[message.sender],profileButton=mine?'':user?`<button class="message-avatar profile-trigger" aria-label="${esc(message.sender)} 프로필 보기" onclick="event.stopPropagation();showUserProfile('${user.id}')">${avatarMarkup(message.sender,avatar)}</button>`:`<span class="message-avatar" aria-hidden="true">${avatarMarkup(message.sender,avatar)}</span>`;
   const reply=message.reply_to?`<div class="reply-quote"><b>↩ ${esc(message.reply_to.sender)}</b><span>${esc(message.reply_to.body)}</span></div>`:'';
   const source=message.has_sources?`<button type="button" class="source-toggle" aria-label="출처 보기" aria-expanded="false" onclick="event.stopPropagation();toggleSources(this,'${message.id}')">⌄</button><div class="source-panel" hidden onclick="event.stopPropagation()"></div>`:'';
-  return `<article class="bubble ${mine?'mine':'peer'}" data-message-id="${esc(message.id)}" ${mine?'':`onclick="inspectMessageById('${message.id}')"`}>${profileButton}${mine?'':`<div class="message-sender">${esc(message.sender)}</div>`}<time class="bubble-time">${messageTime(message.created)}</time>${reply}<div class="message-body">${esc(message.body)}</div>${mine&&message.unread?`<span class="read">${message.unread}</span>`:''}<div class="message-tools">${source}<button type="button" class="reply-message" aria-label="답장" title="답장" onclick="event.stopPropagation();startReply('${message.id}')">↩</button></div>${mine?`<button class="delete-message" title="메시지 삭제" onclick="event.stopPropagation();removeMessage('${message.id}')">×</button>`:''}</article>`;
+  return `<article class="bubble ${mine?'mine':'peer'}" data-message-id="${esc(message.id)}" ${mine?'':`onclick="inspectMessageById('${message.id}')"`}>${profileButton}${mine?'':`<div class="message-sender">${esc(message.sender)}</div>`}<time class="bubble-time">${messageTime(message.created)}</time>${reply}<div class="message-body">${esc(message.body)}</div>${mine&&message.unread?`<span class="read">${message.unread}</span>`:''}<div class="message-tools">${source}<button type="button" class="reply-message" aria-label="답장" title="답장" onclick="event.stopPropagation();startReply('${message.id}')">↩</button><button type="button" class="message-like" aria-label="공감" aria-pressed="${message.liked_by_me===true}" onclick="event.stopPropagation();setMessageLike(this)">♥ <span>${Number(message.like_count)||0}</span></button></div>${mine?`<button class="delete-message" title="메시지 삭제" onclick="event.stopPropagation();removeMessage('${message.id}')">×</button>`:''}</article>`;
+}
+async function setMessageLike(button) {
+  const bubble=button.closest('[data-message-id]'), room=roomId;
+  if(!bubble||!room||button.disabled)return;
+  button.disabled=true;
+  try {
+    const result=await api(`/api/rooms/${encodeURIComponent(room)}/messages/${encodeURIComponent(bubble.dataset.messageId)}/like`,{method:'POST',body:JSON.stringify({liked:button.getAttribute('aria-pressed')!=='true'})});
+    if(roomId===room&&bubble.isConnected)updateMessageLikes([result]);
+  } catch { alert('공감을 저장하지 못했어요. 다시 시도해 주세요.'); }
+  finally {button.disabled=false}
+}
+function updateMessageLikes(messages) {
+  const list=document.querySelector('#messages'); if(!list)return;
+  for(const message of messages) {
+    const bubble=[...list.querySelectorAll('[data-message-id]')].find(item=>item.dataset.messageId===message.id);
+    const button=bubble?.querySelector('.message-like'); if(!button)continue;
+    button.setAttribute('aria-pressed',String(message.liked_by_me===true));
+    button.querySelector('span').textContent=String(Number(message.like_count)||0);
+  }
 }
 async function friends(){
   nav='friends';

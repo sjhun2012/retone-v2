@@ -86,6 +86,8 @@
 .redesigned .message-avatar { top:-20px; left:-48px; width:38px; height:38px; border-radius:50%; background:#eee1d6; color:#765b49; }
 .redesigned .bubble-time { position:absolute; bottom:2px; left:calc(100% + 6px); color:#8c7e74; font-size:10px; line-height:1.2; white-space:nowrap; }
 .redesigned .bubble.mine .bubble-time { left:auto; right:calc(100% + 6px); }
+.message-like { border:0; border-radius:9px; padding:3px 7px; background:transparent; color:#9c8d83; font-size:12px; }
+.message-like[aria-pressed="true"] { color:#bb626b; background:#f8e9e8; }
 .redesigned .meta { display:flex; gap:6px; margin-bottom:6px; font-size:11px; }
 .redesigned .sendbar .emoji-trigger { flex:none; width:40px; height:44px; padding:0; background:transparent; color:#806a5b; font-size:24px; }
 .emoji-picker { position:absolute; bottom:calc(100% + 8px); left:16px; display:grid; grid-template-columns:repeat(8,1fr); gap:3px; padding:8px; border:1px solid #e6d9ce; border-radius:12px; background:#fffdfa; box-shadow:0 8px 24px #3826171f; z-index:3; }
