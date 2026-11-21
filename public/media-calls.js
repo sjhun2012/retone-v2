@@ -200,24 +200,11 @@
   function stopInvitePolling() { clearInterval(inviteTimer); inviteTimer = null; mediaRoomId = null; }
 
   window.chooseChatFile = chooseChatFile;
+  window.addMediaControls = addMediaControls;
   window.toggleVoiceRecording = toggleVoiceRecording;
   window.startCall = startCall;
   window.acceptIncomingCall = acceptIncomingCall;
   window.rejectIncomingCall = rejectIncomingCall;
   window.endCall = endCall;
 
-  const appRoot = document.querySelector('#app');
-  const syncMediaUi = () => {
-    const chat = document.querySelector('.chat');
-    if (chat && roomId) {
-      addMediaControls();
-    } else if (mediaRoomId) {
-      endCall();
-      stopInvitePolling();
-    }
-  };
-  if (appRoot) {
-    syncMediaUi();
-    appRoot.addEventListener('click', () => setTimeout(syncMediaUi, 0), true);
-  }
 })();
