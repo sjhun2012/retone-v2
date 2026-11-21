@@ -71,6 +71,7 @@ async function verifyQuickLogin(browser, label, expectedName) {
 }
 
 async function send(page, room, text) {
+  console.log(`[before-send] ${text} disabled=${await page.locator('#text').isDisabled()} pending=${await page.evaluate(() => typeof pendingSend === 'undefined' ? 'undefined' : String(Boolean(pendingSend)))}`);
   page.once('pageerror', error => console.log(`[pageerror] ${error.stack || error.message}`));
   page.once('console', message => { if (message.type() === 'error') console.log(`[pageconsole] ${message.text()}`); });
   page.once('requestfailed', request => console.log(`[requestfailed] ${request.method()} ${request.url()} ${request.failure()?.errorText || ''}`));
