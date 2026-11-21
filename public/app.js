@@ -207,7 +207,7 @@ async function sendApproved(){
   const next=pendingSend;
   if(!next)return;
   pendingSend=null;
-  if(!isCurrentSendView(next))return;
+  if(!isCurrentSendSession(next))return;
   next.modal?.remove();
   setAiStatus('');
   const sourceQuery=next.result?.info?.queries?.find(query=>String(query||'').trim())||null;
@@ -220,10 +220,11 @@ function handleChatInput(value){
 }
 
 function isCurrentSendView(view){
-  // A responsive layout enhancement may add siblings to the chat while an AI
-  // check is in flight. Keep the safety boundary tied to the signed-in user
-  // and room, but do not discard an otherwise valid send because that DOM node
-  // was replaced by a harmless layout refresh.
+  return isCurrentSendSession(view) && view.list && view.list===document.querySelector('.chat #messages');
+}
+function isCurrentSendSession(view){
+  // The room/user boundary is safe to retain even if a responsive enhancement
+  // replaced the message list while the AI check was in flight.
   return nav==='chat' && view.userId===signedInId && view.room===roomId &&
     Boolean(document.querySelector('.chat #messages'));
 }
@@ -377,11 +378,11 @@ async function send(event){
   try{
     const result=await checkForSend(body);
     if(pendingSend!==next)return;
-    if(!isCurrentSendView(next)){pendingSend=null;return;}
+    if(!isCurrentSendSession(next)){pendingSend=null;return;}
     showCheckResult(result);
   }catch{
     if(pendingSend!==next)return;
-    if(!isCurrentSendView(next)){pendingSend=null;return;}
+    if(!isCurrentSendSession(next)){pendingSend=null;return;}
     showCheckResult({error:'AI_CHECK_UNAVAILABLE',source:'unavailable'});
   }
 }
