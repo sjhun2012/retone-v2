@@ -1,6 +1,5 @@
 (() => {
   const MAX_FILE_BYTES = 8 * 1024 * 1024;
-  const originalView = window.view;
   let mediaRoomId = null;
   let recorder = null;
   let recorderStream = null;
@@ -33,14 +32,9 @@
     return `${(value / (1024 * 1024)).toFixed(1)}MB`;
   }
 
-  if (typeof originalView === 'function') {
-    window.view = function mediaView(message) {
-      const html = originalView(message);
-      if (!message.attachment) return html;
-      const marker = `<div class="message-body">${esc(message.body)}</div>`;
-      return html.replace(marker, `${marker}${attachmentMarkup(message)}`);
-    };
-  }
+  // The base chat renderer calls this helper when it sees an attachment. Keep
+  // the renderer itself untouched so media enhancements cannot affect sends.
+  window.retoneAttachmentMarkup = attachmentMarkup;
 
   function currentRoom() { return (data?.rooms || []).find(room => room.id === roomId); }
   function roomTarget(room) { return (room?.participant_ids || []).find(id => id && id !== signedInId) || null; }
