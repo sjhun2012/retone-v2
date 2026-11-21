@@ -71,23 +71,39 @@ async function verifyQuickLogin(browser, label, expectedName) {
 }
 
 async function send(page, room, text) {
+  if (text === '?') {
+    page.on('console', message => console.log(`[debug-console] ${message.type()} ${message.text()}`));
+    page.on('request', request => { if (request.method() === 'POST' || request.url().includes('call-invites')) console.log(`[debug-request] ${request.method()} ${request.url()} ${request.postData() || ''}`); });
+    page.on('response', response => { if (response.request().method() === 'POST' || response.url().includes('call-invites')) console.log(`[debug-response] ${response.status()} ${response.url()}`); });
+  }
   const sent = page.waitForResponse(response => {
     const request = response.request();
     return request.method() === 'POST' && new URL(response.url()).pathname === `/api/rooms/${room.id}/messages`
       && request.postDataJSON().body === text;
   });
-  const [response] = await Promise.all([sent, (async () => {
+  try {
+    const [response] = await Promise.all([sent, (async () => {
     await page.locator('#text').fill(text);
     await page.getByRole('button', {name: '보내기', exact: true}).click();
     const approval = page.locator('.ai-check').getByRole('button', {name: '이대로 보내기'});
     const bubble = page.locator('.bubble.mine[data-message-id]').filter({hasText: text});
     await approval.or(bubble).first().waitFor();
     if (await approval.isVisible()) await approval.click();
-  })()]);
-  assert.ok(response.ok(), `Failed to send "${text}" (${response.status()})`);
-  const message = await response.json();
-  await page.locator(`[data-message-id="${message.id}"]`).waitFor();
-  return message;
+    })()]);
+    assert.ok(response.ok(), `Failed to send "${text}" (${response.status()})`);
+    const message = await response.json();
+    await page.locator(`[data-message-id="${message.id}"]`).waitFor();
+    return message;
+  } catch (error) {
+    if (text === '?') console.log('[debug-state]', await page.evaluate(() => ({
+      body: document.body.innerText.slice(-1200),
+      input: {value: document.querySelector('#text')?.value, disabled: document.querySelector('#text')?.disabled, placeholder: document.querySelector('#text')?.placeholder},
+      checks: [...document.querySelectorAll('.ai-check, #ai-pending, .modal')].map(node => node.innerText),
+      controls: [...document.querySelectorAll('.chat-actions button')].map(node => node.innerText),
+      room: document.querySelector('#messages')?.dataset.roomId
+    })));
+    throw error;
+  }
 }
 
 function bubble(page, message) { return page.locator(`[data-message-id="${message.id}"]`); }
