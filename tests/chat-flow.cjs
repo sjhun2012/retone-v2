@@ -95,14 +95,14 @@ async function send(page, room, text) {
     await page.locator(`[data-message-id="${message.id}"]`).waitFor();
     return message;
   } catch (error) {
-    if (text === '?') console.log('[debug-state]', await page.evaluate(() => ({
+    if (text === '?') console.log('[debug-state]', JSON.stringify(await page.evaluate(() => ({
       body: document.body.innerText.slice(-1200),
       input: {value: document.querySelector('#text')?.value, disabled: document.querySelector('#text')?.disabled, placeholder: document.querySelector('#text')?.placeholder},
       form: {onsubmit: document.querySelector('.sendbar')?.getAttribute('onsubmit'), buttons: [...document.querySelectorAll('.sendbar button')].map(b=>({text:b.innerText,aria:b.getAttribute('aria-label'),type:b.type,rect:b.getBoundingClientRect().toJSON(),pointer:getComputedStyle(b).pointerEvents})), active: document.activeElement?.outerHTML?.slice(0,200)},
       checks: [...document.querySelectorAll('.ai-check, #ai-pending, .modal')].map(node => node.innerText),
       controls: [...document.querySelectorAll('.chat-actions button')].map(node => node.innerText),
       room: document.querySelector('#messages')?.dataset.roomId
-    })));
+    }))));
     throw error;
   }
 }
