@@ -364,7 +364,6 @@ function showCheckResult(result){
   sendApproved();
 }
 async function send(event){
-  console.error('retone-send-start',document.querySelector('#text')?.value||'');
   event.preventDefault();
   if(pendingSend && !isCurrentSendView(pendingSend))pendingSend=null;
   if(pendingSend)return;
@@ -655,6 +654,7 @@ async function openRoom(id) {
   app.innerHTML=`<main class="layout android-layout">${rail()}<section class="chat"><header class="head chat-head"><button class="back" onclick="home()">‹</button>${titleMarkup}<div class="chat-actions"><button onclick="inviteFriends()">＋ 초대</button><button onclick="newAgreement()">✓</button><button class="room-more" aria-label="채팅방 메뉴" onclick="roomMenu()">⋯</button></div></header><div class="room-notice-host" id="room-schedule-notice">${roomScheduleNotice(id)}</div><section class="messages" id="messages" data-room-id="${esc(id)}">${messages.map(view).join('')}</section><form class="sendbar"><div id="reply-compose" class="reply-compose" hidden></div><input id="text" placeholder="메시지를 입력하세요" autocomplete="off" oninput="handleChatInput(this.value)"><span id="ai-status" class="ai-status"></span><button type="button" aria-label="보내기">↑</button></form></section></main>`;
   feed.list = document.querySelector('#messages');
   window.addMediaControls?.();
+  window.startInvitePolling?.(id);
   const composer=document.querySelector('.sendbar');
   composer?.addEventListener('submit',send);
   composer?.querySelector('button[aria-label="보내기"]')?.addEventListener('click',send);

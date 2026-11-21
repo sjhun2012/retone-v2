@@ -204,6 +204,8 @@
 
   window.chooseChatFile = chooseChatFile;
   window.addMediaControls = addMediaControls;
+  window.startInvitePolling = startInvitePolling;
+  window.stopInvitePolling = stopInvitePolling;
   window.toggleVoiceRecording = toggleVoiceRecording;
   window.startCall = startCall;
   window.acceptIncomingCall = acceptIncomingCall;
