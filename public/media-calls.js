@@ -41,10 +41,13 @@
 
   function addMediaControls() {
     const chat = document.querySelector('.chat');
-    const actions = chat?.querySelector('.chat-actions');
-    if (!chat || !actions || actions.dataset.mediaReady) return;
-    actions.dataset.mediaReady = 'true';
-    actions.insertAdjacentHTML('beforeend', '<button type="button" class="media-action" title="파일 보내기" onclick="chooseChatFile()">＋ 파일</button><button type="button" class="media-action record-voice" title="음성 녹음" onclick="toggleVoiceRecording()">🎙</button><button type="button" class="media-action" title="보이스톡" onclick="startCall(\'audio\')">☎</button><button type="button" class="media-action" title="화상통화" onclick="startCall(\'video\')">▣</button>');
+    const composer = chat?.querySelector('.sendbar');
+    if (!chat || !composer || chat.dataset.mediaReady) return;
+    chat.dataset.mediaReady = 'true';
+    const controls = document.createElement('div');
+    controls.className = 'media-actions';
+    controls.innerHTML = '<button type="button" class="media-action" title="파일 보내기" onclick="chooseChatFile()">＋ 파일</button><button type="button" class="media-action record-voice" title="음성 녹음" onclick="toggleVoiceRecording()">🎙</button><button type="button" class="media-action" title="보이스톡" onclick="startCall(\'audio\')">☎</button><button type="button" class="media-action" title="화상통화" onclick="startCall(\'video\')">▣</button>';
+    composer.insertBefore(controls, composer.firstChild);
     const input = document.createElement('input');
     input.type = 'file'; input.id = 'chat-file-input'; input.hidden = true;
     input.addEventListener('change', () => { const file = input.files?.[0]; input.value = ''; if (file) uploadFile(file); });
