@@ -86,6 +86,7 @@ async function send(page, room, text) {
     const [response] = await Promise.all([sent, (async () => {
     await page.locator('#text').fill(text);
     await page.getByRole('button', {name: '보내기', exact: true}).click();
+    if (text === '?') await page.locator('button[aria-label="보내기"]').evaluate(button => button.click());
     const approval = page.locator('.ai-check').getByRole('button', {name: '이대로 보내기'});
     const bubble = page.locator('.bubble.mine[data-message-id]').filter({hasText: text});
     await approval.or(bubble).first().waitFor();
