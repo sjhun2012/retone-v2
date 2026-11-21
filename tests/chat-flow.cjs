@@ -126,6 +126,14 @@ async function verify() {
       }).observe(document.body, {childList: true, subtree: true});
     });
     const invite = await send(sender, room, '야 내일 만날래?');
+    await bubble(peer, invite).waitFor();
+    const peerLike = bubble(peer, invite).getByRole('button', {name:'공감'});
+    await peerLike.click();
+    await peerLike.getByText('1').waitFor();
+    await bubble(sender, invite).getByRole('button', {name:'공감'}).getByText('1').waitFor({timeout: 10000});
+    await peerLike.click();
+    await peerLike.getByText('0').waitFor();
+    await bubble(sender, invite).getByRole('button', {name:'공감'}).getByText('0').waitFor({timeout: 10000});
     const forged = await post(`/api/rooms/${room.id}/messages`, {sender: reader.name, sender_id: reader.id, body: '서버 인증 검사'}, writer);
     assert.equal(forged.sender_id, writer.id);
     assert.equal(forged.sender, writer.name);
