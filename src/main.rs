@@ -5,12 +5,14 @@ mod sources;
 use argon2::{Argon2, PasswordHash, PasswordHasher, PasswordVerifier};
 use axum::{
     Extension, Json, Router,
-    extract::{Path, Query, Request, State},
+    body::Body,
+    extract::{DefaultBodyLimit, Path, Query, Request, State},
     http::{HeaderMap, HeaderName, HeaderValue, Method, StatusCode, header},
     middleware::{self, Next},
     response::{IntoResponse, Response, sse::{Event, KeepAlive, Sse}},
     routing::{delete, get, patch, post},
 };
+use base64::Engine;
 use chrono::Utc;
 use futures_util::stream::{self, Stream};
 use password_hash::SaltString;
@@ -56,6 +58,19 @@ struct Message {
     source_query: Option<String>,
     #[serde(skip_serializing)]
     likes: Vec<Uuid>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    attachment: Option<Attachment>,
+}
+#[derive(Clone, Serialize)]
+struct Attachment {
+    kind: String,
+    name: String,
+    mime: String,
+    size: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    duration_ms: Option<u64>,
+    #[serde(skip_serializing)]
+    data_url: String,
 }
 #[derive(Serialize)]
 struct MessageView {
@@ -124,6 +139,19 @@ struct Data {
     friend_requests: Vec<FriendRequest>,
     friendships: Vec<Friendship>,
     source_cache: HashMap<String, sources::SourceInsight>,
+    call_signals: Vec<CallSignal>,
+}
+
+#[derive(Clone, Serialize)]
+struct CallSignal {
+    id: String,
+    room_id: String,
+    call_id: String,
+    from_id: Uuid,
+    target_id: Uuid,
+    kind: String,
+    payload: serde_json::Value,
+    created: i64,
 }
 #[derive(Clone)]
 struct FriendRequest {
@@ -167,6 +195,24 @@ struct Send {
     body: String,
     reply_to_id: Option<String>,
     source_query: Option<String>,
+}
+#[derive(Deserialize)]
+struct SendAttachment {
+    kind: String,
+    name: String,
+    mime: String,
+    data_url: String,
+    duration_ms: Option<u64>,
+}
+#[derive(Deserialize)]
+struct CallSignalInput {
+    target_id: Uuid,
+    kind: String,
+    payload: serde_json::Value,
+}
+#[derive(Deserialize, Default)]
+struct CallSignalQuery {
+    since: Option<i64>,
 }
 #[derive(Deserialize)]
 struct SourceRequest {
@@ -480,7 +526,10 @@ async fn require_auth(State(app): State<App>, mut request: Request, next: Next) 
 }
 
 async fn public_config() -> Json<serde_json::Value> {
-    Json(serde_json::json!({"test_logins": test_logins_enabled()}))
+    Json(serde_json::json!({
+        "test_logins": test_logins_enabled(),
+        "webrtc_stun_url": env::var("WEBRTC_STUN_URL").unwrap_or_default(),
+    }))
 }
 
 async fn auth_me(State(app): State<App>, Extension(auth): Extension<AuthUser>) -> Result<Json<PublicUser>, StatusCode> {
@@ -1198,6 +1247,7 @@ async fn send(
         has_sources: source_query.is_some(),
         source_query,
         likes: vec![],
+        attachment: None,
     };
     d.messages.push(message.clone());
     if let Some(room) = d.rooms.iter_mut().find(|r| r.id == id) {
@@ -1205,6 +1255,117 @@ async fn send(
         room.updated = message.created;
     }
     Ok(Json(message))
+}
+
+fn attachment_message_body(input: &SendAttachment) -> String {
+    match input.kind.as_str() {
+        "audio" => "음성 메시지".to_string(),
+        _ => format!("파일: {}", input.name.trim()),
+    }
+}
+
+fn attachment_from_input(input: &SendAttachment) -> Result<Attachment, StatusCode> {
+    let kind = input.kind.trim().to_ascii_lowercase();
+    if kind != "file" && kind != "audio" { return Err(StatusCode::BAD_REQUEST); }
+    let name = input.name.trim().chars().take(160).collect::<String>();
+    if name.is_empty() { return Err(StatusCode::BAD_REQUEST); }
+    let (header, encoded) = input.data_url.split_once(',').ok_or(StatusCode::BAD_REQUEST)?;
+    if !header.starts_with("data:") || !header.contains(";base64") { return Err(StatusCode::BAD_REQUEST); }
+    let bytes = base64::engine::general_purpose::STANDARD.decode(encoded).map_err(|_| StatusCode::BAD_REQUEST)?;
+    const MAX_ATTACHMENT_BYTES: usize = 8 * 1024 * 1024;
+    if bytes.is_empty() || bytes.len() > MAX_ATTACHMENT_BYTES { return Err(StatusCode::PAYLOAD_TOO_LARGE); }
+    let mime = input.mime.trim().to_ascii_lowercase();
+    if mime.len() > 120 || mime.chars().any(|ch| matches!(ch, '\r' | '\n' | '"')) { return Err(StatusCode::BAD_REQUEST); }
+    if kind == "audio" && !mime.starts_with("audio/") { return Err(StatusCode::BAD_REQUEST); }
+    Ok(Attachment { kind, name, mime, size: bytes.len(), duration_ms: input.duration_ms, data_url: input.data_url.clone() })
+}
+
+async fn send_attachment(
+    State(app): State<App>,
+    Extension(auth): Extension<AuthUser>,
+    Path(id): Path<String>,
+    Json(input): Json<SendAttachment>,
+) -> Result<Json<Message>, StatusCode> {
+    let attachment = attachment_from_input(&input)?;
+    let mut d = app.data.write().await;
+    rewrite::require_member(&d, &id, auth.id)?;
+    let created = Utc::now().timestamp_millis();
+    let unread = d.rooms.iter().find(|room| room.id == id).map(|room| room.members.saturating_sub(1)).unwrap_or(0);
+    let body = attachment_message_body(&input);
+    let message = Message {
+        id: Uuid::new_v4().to_string(), room_id: id.clone(), sender: auth.name.clone(), sender_id: Some(auth.id), mine: false,
+        body, created, unread, read_by: vec![auth.name.clone()], reply_to: None, has_sources: false, source_query: None,
+        likes: vec![], attachment: Some(attachment),
+    };
+    d.messages.push(message.clone());
+    if let Some(room) = d.rooms.iter_mut().find(|r| r.id == id) { room.last = message.body.clone(); room.updated = created; }
+    Ok(Json(message))
+}
+
+fn safe_attachment_filename(name: &str) -> String {
+    let value: String = name.chars().filter(|ch| ch.is_alphanumeric() || matches!(ch, '.' | '-' | '_' | ' ')).take(120).collect();
+    if value.trim().is_empty() { "download".to_string() } else { value }
+}
+
+async fn download_attachment(
+    State(app): State<App>, Extension(auth): Extension<AuthUser>, Path((room_id, message_id)): Path<(String, String)>,
+) -> Result<Response, StatusCode> {
+    let data = app.data.read().await;
+    rewrite::require_member(&data, &room_id, auth.id)?;
+    let message = data.messages.iter().find(|message| message.room_id == room_id && message.id == message_id).ok_or(StatusCode::NOT_FOUND)?;
+    let attachment = message.attachment.as_ref().ok_or(StatusCode::NOT_FOUND)?;
+    let (_, encoded) = attachment.data_url.split_once(',').ok_or(StatusCode::INTERNAL_SERVER_ERROR)?;
+    let bytes = base64::engine::general_purpose::STANDARD.decode(encoded).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let mut response = Body::from(bytes).into_response();
+    let content_type = HeaderValue::from_str(&attachment.mime).unwrap_or_else(|_| HeaderValue::from_static("application/octet-stream"));
+    response.headers_mut().insert(header::CONTENT_TYPE, content_type);
+    let disposition = if attachment.kind == "audio" {
+        "inline".to_string()
+    } else {
+        format!("attachment; filename=\"{}\"", safe_attachment_filename(&attachment.name))
+    };
+    if let Ok(value) = HeaderValue::from_str(&disposition) { response.headers_mut().insert(header::CONTENT_DISPOSITION, value); }
+    response.headers_mut().insert(header::CACHE_CONTROL, HeaderValue::from_static("private, no-store"));
+    response.headers_mut().insert(header::X_CONTENT_TYPE_OPTIONS, HeaderValue::from_static("nosniff"));
+    Ok(response)
+}
+
+async fn send_call_signal(
+    State(app): State<App>, Extension(auth): Extension<AuthUser>, Path((room_id, call_id)): Path<(String, String)>, Json(input): Json<CallSignalInput>,
+) -> Result<Json<CallSignal>, StatusCode> {
+    if call_id.len() > 120 || input.kind.len() > 32 || !matches!(input.kind.as_str(), "invite" | "offer" | "answer" | "candidate" | "hangup" | "reject") { return Err(StatusCode::BAD_REQUEST); }
+    if serde_json::to_vec(&input.payload).map_err(|_| StatusCode::BAD_REQUEST)?.len() > 64 * 1024 { return Err(StatusCode::PAYLOAD_TOO_LARGE); }
+    let mut data = app.data.write().await;
+    rewrite::require_member(&data, &room_id, auth.id)?;
+    let room = data.rooms.iter().find(|room| room.id == room_id).ok_or(StatusCode::NOT_FOUND)?;
+    if !room.participant_ids.contains(&input.target_id.to_string()) { return Err(StatusCode::FORBIDDEN); }
+    let now = Utc::now().timestamp_millis();
+    data.call_signals.retain(|signal| signal.created > now - 10 * 60 * 1000);
+    let signal = CallSignal { id: Uuid::new_v4().to_string(), room_id, call_id, from_id: auth.id, target_id: input.target_id, kind: input.kind, payload: input.payload, created: now };
+    data.call_signals.push(signal.clone());
+    Ok(Json(signal))
+}
+
+async fn call_signals(
+    State(app): State<App>, Extension(auth): Extension<AuthUser>, Path((room_id, call_id)): Path<(String, String)>, Query(query): Query<CallSignalQuery>,
+) -> Result<Json<Vec<CallSignal>>, StatusCode> {
+    let mut data = app.data.write().await;
+    rewrite::require_member(&data, &room_id, auth.id)?;
+    let now = Utc::now().timestamp_millis();
+    data.call_signals.retain(|signal| signal.created > now - 10 * 60 * 1000);
+    let since = query.since.unwrap_or(0);
+    Ok(Json(data.call_signals.iter().filter(|signal| signal.room_id == room_id && signal.call_id == call_id && signal.created > since && (signal.from_id == auth.id || signal.target_id == auth.id)).cloned().collect()))
+}
+
+async fn call_invites(
+    State(app): State<App>, Extension(auth): Extension<AuthUser>, Path(room_id): Path<String>, Query(query): Query<CallSignalQuery>,
+) -> Result<Json<Vec<CallSignal>>, StatusCode> {
+    let mut data = app.data.write().await;
+    rewrite::require_member(&data, &room_id, auth.id)?;
+    let now = Utc::now().timestamp_millis();
+    data.call_signals.retain(|signal| signal.created > now - 10 * 60 * 1000);
+    let since = query.since.unwrap_or(0);
+    Ok(Json(data.call_signals.iter().filter(|signal| signal.room_id == room_id && signal.target_id == auth.id && signal.kind == "invite" && signal.created > since).cloned().collect()))
 }
 
 #[derive(Deserialize)]
@@ -1584,6 +1745,7 @@ async fn main() {
             friend_requests: vec![],
             friendships: test_friendships,
             source_cache: HashMap::new(),
+            call_signals: vec![],
         })),
     };
     let protected = Router::new()
@@ -1616,6 +1778,10 @@ async fn main() {
         .route("/api/appointments/{id}", patch(update_appointment).delete(delete_appointment))
         .route("/api/appointments/{id}/creator/{creator}", patch(update_own_appointment).delete(delete_own_appointment))
         .route("/api/rooms/{id}/messages", get(messages).post(send))
+        .route("/api/rooms/{id}/attachments", post(send_attachment))
+        .route("/api/rooms/{room_id}/messages/{message_id}/attachment", get(download_attachment))
+        .route("/api/rooms/{room_id}/calls/{call_id}/signals", get(call_signals).post(send_call_signal))
+        .route("/api/rooms/{room_id}/call-invites", get(call_invites))
         .route("/api/rooms/{room_id}/messages/{message_id}/like", post(set_message_like))
         .route("/api/messages/{message_id}/sources", post(message_sources))
         .route("/api/rooms/{id}/rewrite", post(rewrite::in_room))
@@ -1636,9 +1802,10 @@ async fn main() {
         .layer(SetResponseHeaderLayer::if_not_present(header::X_CONTENT_TYPE_OPTIONS, HeaderValue::from_static("nosniff")))
         .layer(SetResponseHeaderLayer::if_not_present(header::X_FRAME_OPTIONS, HeaderValue::from_static("DENY")))
         .layer(SetResponseHeaderLayer::if_not_present(header::REFERRER_POLICY, HeaderValue::from_static("strict-origin-when-cross-origin")))
-        .layer(SetResponseHeaderLayer::if_not_present(HeaderName::from_static("permissions-policy"), HeaderValue::from_static("camera=(), microphone=(), geolocation=()")))
+        .layer(SetResponseHeaderLayer::if_not_present(HeaderName::from_static("permissions-policy"), HeaderValue::from_static("camera=(self), microphone=(self), geolocation=()")))
         .layer(SetResponseHeaderLayer::if_not_present(HeaderName::from_static("content-security-policy"), HeaderValue::from_static("default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'none'")))
         .layer(SetResponseHeaderLayer::if_not_present(header::STRICT_TRANSPORT_SECURITY, HeaderValue::from_static("max-age=31536000; includeSubDomains")))
+        .layer(DefaultBodyLimit::max(12 * 1024 * 1024))
         .with_state(app_state);
     let port = env::var("PORT")
         .unwrap_or_else(|_| "4000".into())

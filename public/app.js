@@ -207,7 +207,7 @@ async function sendApproved(){
   const next=pendingSend;
   if(!next)return;
   pendingSend=null;
-  if(!isCurrentSendView(next))return;
+  if(!isCurrentSendSession(next))return;
   next.modal?.remove();
   setAiStatus('');
   const sourceQuery=next.result?.info?.queries?.find(query=>String(query||'').trim())||null;
@@ -220,8 +220,13 @@ function handleChatInput(value){
 }
 
 function isCurrentSendView(view){
-  return nav==='chat' && view.userId===signedInId && view.room===roomId &&
-    view.list && view.list===document.querySelector('.chat #messages');
+  return isCurrentSendSession(view) && view.list && view.list===document.querySelector('.chat #messages');
+}
+function isCurrentSendSession(view){
+  // The room/user boundary is safe to retain even if a responsive enhancement
+  // replaced the message list while the AI check was in flight.
+  const current=nav==='chat' && view.userId===signedInId && view.room===roomId && Boolean(document.querySelector('.chat #messages'));
+  return current;
 }
 
 function offerScheduleOnMessage(view,message,proposal){
@@ -373,11 +378,11 @@ async function send(event){
   try{
     const result=await checkForSend(body);
     if(pendingSend!==next)return;
-    if(!isCurrentSendView(next)){pendingSend=null;return;}
+    if(!isCurrentSendSession(next)){pendingSend=null;return;}
     showCheckResult(result);
   }catch{
     if(pendingSend!==next)return;
-    if(!isCurrentSendView(next)){pendingSend=null;return;}
+    if(!isCurrentSendSession(next)){pendingSend=null;return;}
     showCheckResult({error:'AI_CHECK_UNAVAILABLE',source:'unavailable'});
   }
 }
@@ -489,7 +494,8 @@ function view(message){
   const mine=isMyMessage(message),user=userProfilesByName[message.sender],avatar=user?.avatar_url||userAvatarByName[message.sender],profileButton=mine?'':user?`<button class="message-avatar profile-trigger" aria-label="${esc(message.sender)} 프로필 보기" onclick="event.stopPropagation();showUserProfile('${user.id}')">${avatarMarkup(message.sender,avatar)}</button>`:`<span class="message-avatar" aria-hidden="true">${avatarMarkup(message.sender,avatar)}</span>`;
   const reply=message.reply_to?`<div class="reply-quote"><b>↩ ${esc(message.reply_to.sender)}</b><span>${esc(message.reply_to.body)}</span></div>`:'';
   const source=message.has_sources?`<button type="button" class="source-toggle" aria-label="출처 보기" aria-expanded="false" onclick="event.stopPropagation();toggleSources(this,'${message.id}')">⌄</button><div class="source-panel" hidden onclick="event.stopPropagation()"></div>`:'';
-  return `<article class="bubble ${mine?'mine':'peer'}" data-message-id="${esc(message.id)}" ${mine?'':`onclick="inspectMessageById('${message.id}')"`}>${profileButton}${mine?'':`<div class="message-sender">${esc(message.sender)}</div>`}<time class="bubble-time">${messageTime(message.created)}</time>${reply}<div class="message-body">${esc(message.body)}</div>${mine&&message.unread?`<span class="read">${message.unread}</span>`:''}<div class="message-tools">${source}<button type="button" class="reply-message" aria-label="답장" title="답장" onclick="event.stopPropagation();startReply('${message.id}')">↩</button><button type="button" class="message-like" aria-label="공감" aria-pressed="${message.liked_by_me===true}" onclick="event.stopPropagation();setMessageLike(this)">♥ <span>${Number(message.like_count)||0}</span></button></div>${mine?`<button class="delete-message" title="메시지 삭제" onclick="event.stopPropagation();removeMessage('${message.id}')">×</button>`:''}</article>`;
+  const attachment=typeof window.retoneAttachmentMarkup==='function'?window.retoneAttachmentMarkup(message):'';
+  return `<article class="bubble ${mine?'mine':'peer'}" data-message-id="${esc(message.id)}" ${mine?'':`onclick="inspectMessageById('${message.id}')"`}>${profileButton}${mine?'':`<div class="message-sender">${esc(message.sender)}</div>`}<time class="bubble-time">${messageTime(message.created)}</time>${reply}<div class="message-body">${esc(message.body)}</div>${attachment}${mine&&message.unread?`<span class="read">${message.unread}</span>`:''}<div class="message-tools">${source}<button type="button" class="reply-message" aria-label="답장" title="답장" onclick="event.stopPropagation();startReply('${message.id}')">↩</button><button type="button" class="message-like" aria-label="공감" aria-pressed="${message.liked_by_me===true}" onclick="event.stopPropagation();setMessageLike(this)">♥ <span>${Number(message.like_count)||0}</span></button></div>${mine?`<button class="delete-message" title="메시지 삭제" onclick="event.stopPropagation();removeMessage('${message.id}')">×</button>`:''}</article>`;
 }
 async function setMessageLike(button) {
   const bubble=button.closest('[data-message-id]'), room=roomId;
@@ -645,8 +651,13 @@ async function openRoom(id) {
   roomMessages = messages.slice();
   feed.applied = request;
   const title=roomDisplayName(room),names=roomPeople(room).join(', '),profile=userProfilesByName[title],titleMarkup=profile?`<button class="chat-profile-trigger" onclick="showUserProfile('${profile.id}')"><h1>${esc(title)}</h1><span>${esc(names)} · ${room.members}명</span></button>`:`<div class="room-title"><h1>${esc(title)}</h1><span>${esc(names)} · ${room.members}명</span></div>`;
-  app.innerHTML=`<main class="layout android-layout">${rail()}<section class="chat"><header class="head chat-head"><button class="back" onclick="home()">‹</button>${titleMarkup}<div class="chat-actions"><button onclick="inviteFriends()">＋ 초대</button><button onclick="newAgreement()">✓</button><button class="room-more" aria-label="채팅방 메뉴" onclick="roomMenu()">⋯</button></div></header><div class="room-notice-host" id="room-schedule-notice">${roomScheduleNotice(id)}</div><section class="messages" id="messages" data-room-id="${esc(id)}">${messages.map(view).join('')}</section><form class="sendbar" onsubmit="send(event)"><div id="reply-compose" class="reply-compose" hidden></div><input id="text" placeholder="메시지를 입력하세요" autocomplete="off" oninput="handleChatInput(this.value)"><span id="ai-status" class="ai-status"></span><button type="submit" aria-label="보내기">↑</button></form></section></main>`;
+  app.innerHTML=`<main class="layout android-layout">${rail()}<section class="chat"><header class="head chat-head"><button class="back" onclick="home()">‹</button>${titleMarkup}<div class="chat-actions"><button onclick="inviteFriends()">＋ 초대</button><button onclick="newAgreement()">✓</button><button class="room-more" aria-label="채팅방 메뉴" onclick="roomMenu()">⋯</button></div></header><div class="room-notice-host" id="room-schedule-notice">${roomScheduleNotice(id)}</div><section class="messages" id="messages" data-room-id="${esc(id)}">${messages.map(view).join('')}</section><form class="sendbar"><div id="reply-compose" class="reply-compose" hidden></div><input id="text" placeholder="메시지를 입력하세요" autocomplete="off" oninput="handleChatInput(this.value)"><span id="ai-status" class="ai-status"></span><button type="button" aria-label="보내기">↑</button></form></section></main>`;
   feed.list = document.querySelector('#messages');
+  window.addMediaControls?.();
+  window.startInvitePolling?.(id);
+  const composer=document.querySelector('.sendbar');
+  composer?.addEventListener('submit',send);
+  composer?.querySelector('button[aria-label="보내기"]')?.addEventListener('click',send);
   feed.list.scrollTop = feed.list.scrollHeight;
   document.querySelector('#text')?.focus();
   watchRoomMessages(feed);
