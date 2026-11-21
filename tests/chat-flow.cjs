@@ -71,12 +71,6 @@ async function verifyQuickLogin(browser, label, expectedName) {
 }
 
 async function send(page, room, text) {
-  console.log(`[before-send] ${text} disabled=${await page.locator('#text').isDisabled()} pending=${await page.evaluate(() => typeof pendingSend === 'undefined' ? 'undefined' : String(Boolean(pendingSend)))} send=${await page.evaluate(() => typeof send)} form=${await page.locator('#text').evaluate(input => input.form?.getAttribute('onsubmit') || '')}`);
-  page.once('pageerror', error => console.log(`[pageerror] ${error.stack || error.message}`));
-  page.once('console', message => { if (message.type() === 'error') console.log(`[pageconsole] ${message.text()}`); });
-  page.once('requestfailed', request => console.log(`[requestfailed] ${request.method()} ${request.url()} ${request.failure()?.errorText || ''}`));
-  page.on('request', request => { if (request.method() === 'POST' && (request.url().includes('/messages') || request.url().includes('/api/ai/'))) console.log(`[request] ${request.url()} ${request.postData()}`); });
-  page.on('response', response => { if (response.request().method() === 'POST' && (response.url().includes('/messages') || response.url().includes('/api/ai/'))) console.log(`[response] ${response.status()} ${response.url()}`); });
   const sent = page.waitForResponse(response => {
     const request = response.request();
     return request.method() === 'POST' && new URL(response.url()).pathname === `/api/rooms/${room.id}/messages`

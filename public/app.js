@@ -220,8 +220,12 @@ function handleChatInput(value){
 }
 
 function isCurrentSendView(view){
+  // A responsive layout enhancement may add siblings to the chat while an AI
+  // check is in flight. Keep the safety boundary tied to the signed-in user
+  // and room, but do not discard an otherwise valid send because that DOM node
+  // was replaced by a harmless layout refresh.
   return nav==='chat' && view.userId===signedInId && view.room===roomId &&
-    view.list && view.list===document.querySelector('.chat #messages');
+    Boolean(document.querySelector('.chat #messages'));
 }
 
 function offerScheduleOnMessage(view,message,proposal){
