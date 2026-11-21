@@ -98,6 +98,7 @@ async function send(page, room, text) {
     if (text === '?') console.log('[debug-state]', await page.evaluate(() => ({
       body: document.body.innerText.slice(-1200),
       input: {value: document.querySelector('#text')?.value, disabled: document.querySelector('#text')?.disabled, placeholder: document.querySelector('#text')?.placeholder},
+      form: {onsubmit: document.querySelector('.sendbar')?.getAttribute('onsubmit'), buttonDisabled: document.querySelector('.sendbar button')?.disabled, buttonRect: document.querySelector('.sendbar button')?.getBoundingClientRect().toJSON(), active: document.activeElement?.outerHTML?.slice(0,200)},
       checks: [...document.querySelectorAll('.ai-check, #ai-pending, .modal')].map(node => node.innerText),
       controls: [...document.querySelectorAll('.chat-actions button')].map(node => node.innerText),
       room: document.querySelector('#messages')?.dataset.roomId

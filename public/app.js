@@ -364,6 +364,7 @@ function showCheckResult(result){
   sendApproved();
 }
 async function send(event){
+  console.error('retone-send-start',document.querySelector('#text')?.value||'');
   event.preventDefault();
   if(pendingSend && !isCurrentSendView(pendingSend))pendingSend=null;
   if(pendingSend)return;
