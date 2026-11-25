@@ -17,7 +17,7 @@ async function main(){
  const message=(await request('/api/rooms/'+room.id+'/messages',{session:alice,method:'POST',body:{body:'내일 오후 6시에 회의실에서 만나자'}})).value;
  const initialDelta=(await request('/api/rooms/'+room.id+'/sync?after='+empty.cursor,{session:bob})).value;assert.equal(initialDelta.snapshot,false);assert.equal(initialDelta.messages.length,1);
  assert.equal(message.alignment_hint,false,'AI off must not create AI cards');
- await request('/api/rooms/'+room.id+'/ai-preferences',{session:alice,method:'PATCH',body:{mode:'careful',checks:{}}});
+ await request('/api/rooms/'+room.id+'/ai-preferences',{session:alice,method:'PATCH',body:{mode:'careful',checks:{}},expected:204});
  const check=(await request('/api/ai/check',{session:alice,method:'POST',body:{room_id:room.id,text:'너 때문에 망했어',ai_intervention:'careful',details:{'강한 공격 표현':'민감하게'}}})).value;
  assert.equal(check.verdict,'PASS');assert.equal(check.source,'off');
  assert.equal((await request('/api/rooms/'+room.id+'/messages/'+message.id,{session:alice,method:'POST'})).value.source,'off');
