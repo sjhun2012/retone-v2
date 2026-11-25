@@ -289,7 +289,7 @@ function savedAiResult(text) {
     : null;
 }
 function rememberAiResult(text, result) {
-  if (["fallback","unavailable"].includes(result?.source)) return;
+  if (["fallback","unavailable","off"].includes(result?.source)) return;
   const key = aiCacheKey(text);
   aiSavedResults[key] = { ...result, savedAt:Date.now(), source: "saved" };
   const keys = Object.keys(aiSavedResults);
@@ -308,7 +308,7 @@ async function api(url, options = {}) {
   if(isAdmin||url.startsWith("/api/admin")||url.startsWith("/api/auth/admin"))headers["X-ReTone-Admin"]="1";
   if(options.body&&options.method!=="GET"){
     const payload=JSON.parse(options.body);
-    if(url.startsWith("/api/ai/")&&!url.endsWith("/reports"))payload.room_id=roomId;
+    if(url.startsWith("/api/ai/")&&!url.endsWith("/reports"))payload.room_id??=roomId;
     if(url.endsWith("/preferences")&&url.startsWith("/api/users/"))payload.ai_settings={sensitivity:sensitivityState(),details:Object.fromEntries(sensitivityKeys.map(key=>[key,payload.ai_intervention==="off"?"끄기":sensitivityWord(key,sensitivityState().categories[key])]))};
     options={...options,body:JSON.stringify(payload)};
   }
@@ -641,7 +641,7 @@ async function refreshRoom(id) {
   const list = document.querySelector("#messages");
   if (roomId !== id || list?.dataset.room !== id) return;
   const request = ++syncSequence;
-  const result = await api(`/api/rooms/${id}/sync?after=${roomSyncCursors.get(id)||0}`);
+  const result = await api(`/api/rooms/${id}/sync${roomSyncCursors.has(id)?"?after="+roomSyncCursors.get(id):""}`);
   if (request !== syncSequence || roomId !== id || !list.isConnected) return;
   for (const key of ["appointments", "agreements", "reflections", "insights"]) {
     data[key] = (data[key] || []).filter(item=>item.room_id!==id).concat(result[key]||[]);

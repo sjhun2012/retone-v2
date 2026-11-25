@@ -11,7 +11,7 @@ pub(super) async fn sync(State(app):State<App>,Path(room):Path<Uuid>,Query(query
  let user=require_user(&app,&headers).await?;require_room_member(&app,room,user).await?;chat::read(&app,room,user).await?;
  let after=query.after.unwrap_or(0).max(0);
  let events=sqlx::query_as::<_,(i64,Uuid,bool)>("SELECT seq,message_id,removed FROM retone_v2.message_events WHERE room_id=$1 AND seq>$2 ORDER BY seq LIMIT 500").bind(room).bind(after).fetch_all(&app.db).await.map_err(|_|StatusCode::INTERNAL_SERVER_ERROR)?;
- let snapshot=after==0;
+ let snapshot=query.after.is_none();
  let cursor=if snapshot{sqlx::query_scalar::<_,i64>("SELECT COALESCE(MAX(seq),0) FROM retone_v2.message_events WHERE room_id=$1").bind(room).fetch_one(&app.db).await.map_err(|_|StatusCode::INTERNAL_SERVER_ERROR)?}else{events.last().map(|e|e.0).unwrap_or(after)};
  let messages=if snapshot{chat::load(&app,room,user,None,None,50).await?}else if events.is_empty(){Vec::new()}else{chat::load(&app,room,user,None,Some(events.iter().map(|e|e.1).collect()),500).await?};
  let present=messages.iter().map(|m|m.id.clone()).collect::<std::collections::HashSet<_>>();

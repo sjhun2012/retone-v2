@@ -13,10 +13,13 @@ async function main(){
  await request('/api/users',{expected:401});await request('/api/users',{session:alice,expected:401});
  for(const friend of [bob,charlie]){await request('/api/friends/request',{session:alice,method:'POST',body:{target_id:friend.id}});await request('/api/friends/accept',{session:friend,method:'POST',body:{target_id:alice.id}});}
  const room=(await request('/api/rooms',{session:alice,method:'POST',body:{name:'Safety room',invitee_ids:[bob.id,charlie.id]}})).value;
+ const empty=(await request('/api/rooms/'+room.id+'/sync',{session:alice})).value;
  const message=(await request('/api/rooms/'+room.id+'/messages',{session:alice,method:'POST',body:{body:'내일 오후 6시에 회의실에서 만나자'}})).value;
+ const initialDelta=(await request('/api/rooms/'+room.id+'/sync?after='+empty.cursor,{session:bob})).value;assert.equal(initialDelta.snapshot,false);assert.equal(initialDelta.messages.length,1);
  assert.equal(message.alignment_hint,false,'AI off must not create AI cards');
+ await request('/api/rooms/'+room.id+'/ai-preferences',{session:alice,method:'PATCH',body:{mode:'careful',checks:{}}});
  const check=(await request('/api/ai/check',{session:alice,method:'POST',body:{room_id:room.id,text:'너 때문에 망했어',ai_intervention:'careful',details:{'강한 공격 표현':'민감하게'}}})).value;
- assert.equal(check.verdict,'PASS');assert.equal(check.source,'fast');
+ assert.equal(check.verdict,'PASS');assert.equal(check.source,'off');
  assert.equal((await request('/api/rooms/'+room.id+'/messages/'+message.id,{session:alice,method:'POST'})).value.source,'off');
  assert.equal((await request('/api/ai/fact-check',{session:bob,method:'POST',body:{message_id:message.id}})).value.status,'disabled');
  for(const [path,body]of [['rewrite',{text:'안녕'}],['support',{text:'안녕'}],['conversation-analysis',{messages:['안녕']}]])await request('/api/ai/'+path,{session:alice,method:'POST',body:{...body,room_id:room.id},expected:409});
@@ -42,6 +45,8 @@ async function main(){
  assert.ok(photo.image_url.startsWith('/api/media/'));
  const image=await fetch(base+photo.image_url,{headers:{Cookie:bob.cookie}});assert.equal(image.status,200);assert.equal(image.headers.get('content-type'),'image/png');
  assert.equal((await fetch(base+photo.image_url,{headers:{Cookie:outsider.cookie}})).status,403);
+ await request('/api/rooms/'+room.id+'/messages/'+photo.id,{session:alice,method:'DELETE',expected:204});
+ assert.equal((await fetch(base+photo.image_url,{headers:{Cookie:bob.cookie}})).status,404);
  const avatar=(await request('/api/users/'+alice.id+'/avatar',{session:alice,method:'POST',body:{data_url:png}})).value;assert.equal(avatar.saved,true);
  for(let i=0;i<65;i++)await request('/api/rooms/'+room.id+'/messages',{session:alice,method:'POST',body:{body:'Pagination '+i}});
  const page=(await request('/api/rooms/'+room.id+'/messages',{session:bob})).value;assert.equal(page.length,50);

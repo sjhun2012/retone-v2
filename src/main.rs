@@ -307,12 +307,6 @@ struct AdminReset {
     confirmation: String,
 }
 #[derive(Deserialize)]
-struct AdminQuery {
-    password: String,
-    #[serde(default)]
-    two_factor: String,
-}
-#[derive(Deserialize)]
 struct DeleteCredentials {
     name: String,
     password: String,
@@ -443,7 +437,6 @@ fn is_valid_mobile_phone(phone: &str) -> bool {
         .chars()
         .filter(|c| c.is_ascii_digit())
         .collect::<String>();
-    // Keep the existing local administrator bootstrap credential working.
     digits.len() == 11 && digits.starts_with("010")
 }
 fn normalize_friend_code(value: &str) -> String {
@@ -1011,12 +1004,9 @@ async fn update_preferences(
     if require_user(&app, &headers).await? != id {
         return Err(StatusCode::FORBIDDEN);
     }
-    if let Some(settings)=input.ai_settings {
-        if settings.to_string().len()>8000{return Err(StatusCode::BAD_REQUEST);}
-        sqlx::query("UPDATE retone_v2.users SET ai_settings=$1 WHERE id=$2").bind(settings).bind(id).execute(&app.db).await.map_err(|_|StatusCode::INTERNAL_SERVER_ERROR)?;
-    }
-    let level = ai_level(Some(&input.ai_intervention));
-    let row=sqlx::query_as::<_,(Uuid,String,Option<String>,String)>("UPDATE retone_v2.users SET ai_intervention=$1 WHERE id=$2 AND deleted_at IS NULL RETURNING id,name,avatar_url,ai_intervention").bind(&level).bind(id).fetch_optional(&app.db).await.map_err(|_|StatusCode::INTERNAL_SERVER_ERROR)?.ok_or(StatusCode::NOT_FOUND)?;
+    if input.ai_settings.as_ref().is_some_and(|settings|settings.to_string().len()>8000){return Err(StatusCode::BAD_REQUEST);}
+    let level=ai_level(Some(&input.ai_intervention));
+    let row=sqlx::query_as::<_,(Uuid,String,Option<String>,String)>("UPDATE retone_v2.users SET ai_intervention=$1,ai_settings=COALESCE($3,ai_settings) WHERE id=$2 AND deleted_at IS NULL RETURNING id,name,avatar_url,ai_intervention").bind(&level).bind(id).bind(input.ai_settings).fetch_optional(&app.db).await.map_err(|_|StatusCode::INTERNAL_SERVER_ERROR)?.ok_or(StatusCode::NOT_FOUND)?;
     Ok(Json(user_out(row.0, row.1, row.2, row.3)))
 }
 async fn moderate_image(data_url: &str) -> Result<serde_json::Value, StatusCode> {
@@ -1122,6 +1112,7 @@ async fn delete_avatar(
     if result.rows_affected() == 0 {
         return Err(StatusCode::NOT_FOUND);
     }
+    sqlx::query("DELETE FROM retone_v2.media WHERE owner_id=$1 AND room_id IS NULL").bind(id).execute(&app.db).await.map_err(|_|StatusCode::INTERNAL_SERVER_ERROR)?;
     Ok(StatusCode::NO_CONTENT)
 }
 fn matched_span<'a>(text: &'a str, needle: &str) -> Option<&'a str> {
@@ -1963,6 +1954,7 @@ async fn guarded_ai_check(State(app):State<App>,headers:HeaderMap,Json(mut input
  let user=require_user(&app,&headers).await?;
  if input.text.chars().count()>4000{return Err(StatusCode::PAYLOAD_TOO_LARGE);}
  let policy=ai_policy::load(&app,user,input.room_id).await?;
+ if policy.level=="off"{return Ok(Json(serde_json::json!({"verdict":"PASS","source":"off","info":{"level":"none"}})));}
  input.ai_intervention=Some(policy.level.clone());
  let mut details=input.details.unwrap_or_default();
  for (name,value) in policy.details {details.insert(name,value);}

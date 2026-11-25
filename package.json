@@ -1,0 +1,7 @@
+{
+  "name": "retone-v2-frontend-checks",
+  "private": true,
+  "scripts": {"test": "node tests/frontend-regressions.cjs && node tests/safety-frontend.cjs", "test:api": "node tests/deployment-smoke.cjs && node tests/safety-api.cjs"},
+  "devDependencies": {"jsdom": "22.1.0"},
+  "engines": {"node": ">=22"}
+}
