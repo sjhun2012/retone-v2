@@ -25,6 +25,9 @@ jobs:
       DATABASE_URL: postgres://retone:retone_test@127.0.0.1:5432/retone_test
       RETONE_INSECURE_COOKIES: "true"
       PORT: "4000"
+      RETONE_PHONE_SECRET: "local-ci-phone-key-32-characters-long"
+      RETONE_ADMIN_PASSWORD: "CI-admin-test-password-only"
+      RETONE_ADMIN_TOTP_SECRET: "GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ"
     steps:
       - uses: actions/checkout@v4
         with:
@@ -39,6 +42,7 @@ jobs:
         run: |
           npm install --no-audit --no-fund --prefix "$RUNNER_TEMP/retone-frontend" jsdom@22.1.0
           NODE_PATH="$RUNNER_TEMP/retone-frontend/node_modules" node tests/frontend-regressions.cjs
+          NODE_PATH="$RUNNER_TEMP/retone-frontend/node_modules" node tests/safety-frontend.cjs
       - name: Check server against existing database schema
         run: |
           git show 251243e00effd021db33bc403b0ca14702dd52c5:migrations/0001_retone_v2.sql > "$RUNNER_TEMP/previous-schema.sql"
@@ -51,7 +55,8 @@ jobs:
             if curl --silent --fail http://127.0.0.1:4000/api/health > /dev/null; then break; fi
             sleep 1
           done
-          if ! node tests/deployment-smoke.cjs; then
+          if ! (node tests/deployment-smoke.cjs && node tests/safety-api.cjs); then
             cat "$RUNNER_TEMP/retone-server.log"
             exit 1
           fi
+

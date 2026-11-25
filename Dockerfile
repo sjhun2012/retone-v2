@@ -16,3 +16,4 @@ COPY --from=builder /app/public /app/public
 ENV PORT=10000
 EXPOSE 10000
 CMD ["/app/retone-v2"]
+

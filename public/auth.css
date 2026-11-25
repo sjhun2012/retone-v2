@@ -26,3 +26,4 @@
 /* Keep password text and its visibility control optically centered. */
 .auth label>.password-field{margin-top:7px}.auth .password-field input{padding-top:13px!important;padding-bottom:17px!important;line-height:1.35}.auth .password-visibility{top:48%!important}.signup-wizard .password-requirements{grid-template-columns:repeat(2,minmax(0,1fr));gap:6px 10px;margin-top:10px}.signup-wizard .password-requirements li{line-height:1.35}
 @media(max-width:420px){.signup-wizard .password-requirements{grid-template-columns:1fr 1fr}}
+

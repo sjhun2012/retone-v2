@@ -74,3 +74,4 @@ pub(super) async fn logout(
         .insert(header::SET_COOKIE, cookie("", 0));
     Ok(response)
 }
+

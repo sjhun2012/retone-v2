@@ -1,4 +1,6 @@
 const app = document.querySelector("#app");
+const roomSyncCursors=new Map(), serverAiPolicies=new Map();
+let aiPreferenceTimer=null, aiPreferenceWrites=Promise.resolve(), adminSetupPassword="";
 let data = null,
   roomId = null,
   nav = "chat";
@@ -100,7 +102,7 @@ function defaultSensitivityCategories() {
 function sensitivityState() {
   try {
     const saved = JSON.parse(
-      localStorage.getItem("retone-ai-sensitivity") || "{}",
+      localStorage.getItem(aiSensitivityKey()) || "{}",
     );
     // v3 restores the intended baseline for attack and indirect-pressure checks.
     // Explicitly disabled (0) categories stay disabled.
@@ -137,8 +139,10 @@ function sensitivityState() {
   }
 }
 function saveSensitivity(state) {
+  serverAiPolicies.clear();
+  if(signedInId&&!isAdmin){clearTimeout(aiPreferenceTimer);aiPreferenceTimer=setTimeout(()=>persistAiPreferences().catch(()=>setAiStatus("AI 설정을 저장하지 못했어요")),300);}
   localStorage.setItem(
-    "retone-ai-sensitivity",
+    aiSensitivityKey(),
     JSON.stringify({ ...state, categoryVersion: 3 }),
   );
 }
@@ -197,10 +201,13 @@ function roomAiConfig(id = roomId) {
 function saveRoomAiConfig(config, id = roomId) {
   if (!id) return;
   localStorage.setItem(roomPreferenceKey("ai", id), JSON.stringify(config));
+  serverAiPolicies.delete(id);
+  aiPreferenceWrites=aiPreferenceWrites.catch(()=>{}).then(()=>api(`/api/rooms/${id}/ai-preferences`,{method:"PATCH",body:JSON.stringify(config)})).catch(()=>setAiStatus("채팅방 AI 설정을 저장하지 못했어요"));
   clearTimeout(aiPrefetch.timer);
   aiPrefetch = { text: "", result: null, promise: null, timer: null };
 }
 function activeAiIntervention() {
+  if(aiIntervention==="off"||sensitivityState().overall<=0||serverAiPolicies.get(roomId)?.level==="off")return "off";
   const mode = roomAiConfig().mode;
   if (mode !== "inherit") return mode;
   const localLevel = interventionFromSensitivity(sensitivityState().overall);
@@ -211,6 +218,7 @@ function activeAiIntervention() {
     : aiIntervention;
 }
 const aiDetails = (useRoomOverride = true) => {
+  if(aiIntervention==="off"||sensitivityState().overall<=0||(useRoomOverride&&activeAiIntervention()==="off"))return Object.fromEntries(sensitivityKeys.map(k=>[k,"끄기"]));
   const state = sensitivityState();
   const details = Object.fromEntries(
     sensitivityKeys.map((key) => [
@@ -276,14 +284,14 @@ const aiCacheKey = (text) =>
   `${AI_CACHE_VERSION}|${signedInId}|${activeAiIntervention()}|${JSON.stringify(aiDetails())}|${aiContextSnapshot().join("\n")}|${text.trim()}`;
 function savedAiResult(text) {
   const result = aiSavedResults[aiCacheKey(text)] || null;
-  return result && (result.verdict === "PASS" || result.verdict === "WARN")
+  return result && Date.now()-(result.savedAt||0)<86400000 && (result.verdict === "PASS" || result.verdict === "WARN")
     ? result
     : null;
 }
 function rememberAiResult(text, result) {
-  if (["fallback","unavailable"].includes(result?.source)) return;
+  if (["fallback","unavailable","off"].includes(result?.source)) return;
   const key = aiCacheKey(text);
-  aiSavedResults[key] = { ...result, source: "saved" };
+  aiSavedResults[key] = { ...result, savedAt:Date.now(), source: "saved" };
   const keys = Object.keys(aiSavedResults);
   if (keys.length > 180)
     keys.slice(0, keys.length - 180).forEach((k) => delete aiSavedResults[k]);
@@ -297,6 +305,13 @@ function rememberAiResult(text, result) {
 async function api(url, options = {}) {
   const headers = { "Content-Type": "application/json", ...(options.headers || {}) };
   if (signedInId && !isAdmin && !url.startsWith("/api/auth/")) headers["X-ReTone-User"] = signedInId;
+  if(isAdmin||url.startsWith("/api/admin")||url.startsWith("/api/auth/admin"))headers["X-ReTone-Admin"]="1";
+  if(options.body&&options.method!=="GET"){
+    const payload=JSON.parse(options.body);
+    if(url.startsWith("/api/ai/")&&!url.endsWith("/reports"))payload.room_id??=roomId;
+    if(url.endsWith("/preferences")&&url.startsWith("/api/users/"))payload.ai_settings={sensitivity:sensitivityState(),details:Object.fromEntries(sensitivityKeys.map(key=>[key,payload.ai_intervention==="off"?"끄기":sensitivityWord(key,sensitivityState().categories[key])]))};
+    options={...options,body:JSON.stringify(payload)};
+  }
   const r = await fetch(url, {
     ...options,
     headers,
@@ -346,6 +361,7 @@ async function openRoom(id) {
     return refreshRoom(id).catch(()=>{});
   }
   const loadVersion = ++roomLoadVersion;
+  roomSyncCursors.delete(id);
   const refreshingCurrentRoom = roomId === id;
   const previousInput = refreshingCurrentRoom ? document.querySelector("#text") : null;
   const draft = previousInput?.value || "";
@@ -391,7 +407,7 @@ async function openRoom(id) {
       item.room_id === id &&
       (item.has_conflict || aiDetails()["대화 흐름 요약"] === "항상"),
   );
-  app.innerHTML = `<main class="layout">${rail()}<section class="chat"><header class="head"><button class="back-button" title="채팅 목록으로" aria-label="채팅 목록으로" onclick="home()"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m14.5 5-7 7 7 7M8 12h9"/></svg></button><span class="room-head-avatar avatar">${avatarContent(room.name, room.avatar_url)}</span><div class="room-title"><h1>${esc(room.name)}</h1>${room.members >= 3 ? `<span class="room-participants">참여자 ${room.members}명</span>` : ""}<span class="room-slot" id="pulse-slot">${conversationPulse()}</span></div><div class="chat-actions"><button class="chat-primary-action" title="친구 초대" aria-label="친구 초대" onclick="inviteFriends()">＋</button><button class="chat-primary-action" title="AI 도움받기" aria-label="AI 도움받기" onclick="openAiHelp()">✦</button><button class="chat-secondary-action" title="약속 잡기" aria-label="약속 잡기" onclick="newAppointment()">◷</button><button class="chat-secondary-action" title="공동 확인" aria-label="공동 확인" onclick="newAgreement()">✓</button><button class="chat-secondary-action" title="회고 카드" aria-label="회고 카드" onclick="newReflection()">↻</button><button class="chat-secondary-action" title="채팅방 설정" aria-label="채팅방 설정" onclick="roomSettings()">⚙</button><button class="chat-more-action" title="더 보기" aria-label="더 보기" onclick="openChatMore()">⋯</button></div></header><section class="messages" id="messages" data-room="${escAttr(id)}">${messages.map(view).join("")}<template id="message-end"></template><div id="typing-status" class="typing-bubble" role="status" aria-live="polite"></div><div class="room-slot" id="alignment-slot">${alignmentCard(messages)}</div><div class="room-slot" id="appointments-slot">${appointments.map(viewAppointment).join("")}</div><div class="room-slot" id="reflections-slot">${reflections.map(viewReflection).join("")}</div><div class="room-slot" id="agreements-slot">${agreementMarkup(id)}</div></section><form class="sendbar" onsubmit="send(event)"><span id="reply-slot" class="room-slot">${replyComposer()}</span><button type="button" class="intent-button" title="의도 표시" onclick="chooseIntent()">${selectedIntent ? "◎" : "＋"}</button><label class="image-upload" title="사진 보내기" aria-label="사진 보내기"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="4.5" width="17" height="15" rx="3"/><circle cx="9" cy="10" r="1.5"/><path d="m5.5 17 4.5-4 3.2 2.7 2.4-2 2.9 3.3"/></svg><input hidden type="file" accept="image/*" onchange="sendImage(this)"></label><input id="text" placeholder="메시지를 입력하세요" autocomplete="off" oninput="onChatTyping(this.value)" onblur="stopTyping()"><span id="ai-status" class="ai-status"></span><button>↑</button></form></section></main>`;
+  app.innerHTML = `<main class="layout">${rail()}<section class="chat"><header class="head"><button class="back-button" title="채팅 목록으로" aria-label="채팅 목록으로" onclick="home()"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m14.5 5-7 7 7 7M8 12h9"/></svg></button><span class="room-head-avatar avatar">${avatarContent(room.name, room.avatar_url)}</span><div class="room-title"><h1>${esc(room.name)}</h1>${room.members >= 3 ? `<span class="room-participants">참여자 ${room.members}명</span>` : ""}<span class="room-slot" id="pulse-slot">${conversationPulse()}</span></div><div class="chat-actions"><button class="chat-primary-action" title="친구 초대" aria-label="친구 초대" onclick="inviteFriends()">＋</button><button class="chat-primary-action" title="AI 도움받기" aria-label="AI 도움받기" onclick="openAiHelp()">✦</button><button class="chat-secondary-action" title="약속 잡기" aria-label="약속 잡기" onclick="newAppointment()">◷</button><button class="chat-secondary-action" title="공동 확인" aria-label="공동 확인" onclick="newAgreement()">✓</button><button class="chat-secondary-action" title="회고 카드" aria-label="회고 카드" onclick="newReflection()">↻</button><button class="chat-secondary-action" title="채팅방 설정" aria-label="채팅방 설정" onclick="roomSettings()">⚙</button><button class="chat-more-action" title="더 보기" aria-label="더 보기" onclick="openChatMore()">⋯</button></div></header><section class="messages" id="messages" data-room="${escAttr(id)}"><button type="button" class="load-older" onclick="loadOlderMessages(this)">이전 대화 불러오기</button>${messages.map(view).join("")}<template id="message-end"></template><div id="typing-status" class="typing-bubble" role="status" aria-live="polite"></div><div class="room-slot" id="alignment-slot">${alignmentCard(messages)}</div><div class="room-slot" id="appointments-slot">${appointments.map(viewAppointment).join("")}</div><div class="room-slot" id="reflections-slot">${reflections.map(viewReflection).join("")}</div><div class="room-slot" id="agreements-slot">${agreementMarkup(id)}</div></section><form class="sendbar" onsubmit="send(event)"><span id="reply-slot" class="room-slot">${replyComposer()}</span><button type="button" class="intent-button" title="의도 표시" onclick="chooseIntent()">${selectedIntent ? "◎" : "＋"}</button><label class="image-upload" title="사진 보내기" aria-label="사진 보내기"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="4.5" width="17" height="15" rx="3"/><circle cx="9" cy="10" r="1.5"/><path d="m5.5 17 4.5-4 3.2 2.7 2.4-2 2.9 3.3"/></svg><input hidden type="file" accept="image/*" onchange="sendImage(this)"></label><input id="text" placeholder="메시지를 입력하세요" autocomplete="off" oninput="onChatTyping(this.value)" onblur="stopTyping()"><span id="ai-status" class="ai-status"></span><button>↑</button></form></section></main>`;
   document.querySelector(".chat > .head")?.insertAdjacentHTML(
     "afterend",
     `<div class="appointment-notice-slot" id="appointment-notice-slot">${agreementNotice(id)}${appointmentNotice(appointments)}</div>`,
@@ -609,7 +625,7 @@ function reconcileBubbles(list, latest) {
       next.insertAdjacentHTML("beforebegin", view(m));
       node = next.previousElementSibling;
       if (!m.mine && !previous.has(m.id)) notifyNewMessage(m);
-    } else if (m.reply_to && previous.has(m.reply_to) && !ids.has(m.reply_to)) {
+    } else if (JSON.stringify({...m,unread:0})!==JSON.stringify({...previous.get(m.id),unread:0}) || (m.reply_to && previous.has(m.reply_to) && !ids.has(m.reply_to))) {
       node.outerHTML = view(m);
       node = next.previousElementSibling;
     }
@@ -625,13 +641,17 @@ async function refreshRoom(id) {
   const list = document.querySelector("#messages");
   if (roomId !== id || list?.dataset.room !== id) return;
   const request = ++syncSequence;
-  const result = await api(`/api/rooms/${id}/sync`);
+  const result = await api(`/api/rooms/${id}/sync${roomSyncCursors.has(id)?"?after="+roomSyncCursors.get(id):""}`);
   if (request !== syncSequence || roomId !== id || !list.isConnected) return;
   for (const key of ["appointments", "agreements", "reflections", "insights"]) {
-    data[key] = (data[key] || []).filter(item=>item.room_id!==id).concat(result[key]);
+    data[key] = (data[key] || []).filter(item=>item.room_id!==id).concat(result[key]||[]);
   }
   const wasNearBottom = list.scrollHeight - list.scrollTop - list.clientHeight < 100;
-  reconcileBubbles(list,result.messages);
+  if(Number.isSafeInteger(result.cursor))roomSyncCursors.set(id,result.cursor);
+  if(result.ai_policy)serverAiPolicies.set(id,result.ai_policy);
+  const latest=mergeRoomUpdate(result);
+  for(const message of latest){if(message.mine&&result.receipts?.[message.id]!==undefined)message.unread=result.receipts[message.id];}
+  reconcileBubbles(list,latest);
   const label = document.querySelector("#typing-status");
   const names = result.typing || [];
   const typingKey = names.join("|");
@@ -1021,17 +1041,10 @@ async function renderAdminUsers() {
     root.innerHTML = `<small>사용자 목록을 불러오지 못했어요.</small>`;
   }
 }
-function openAdminReports() {
-  popup(
-    `<div class="admin-reports"><span>AI 문의 관리</span><h2>접수된 문의를 확인해요</h2><p>관리자 비밀번호와 2차 인증을 다시 입력하면 원문과 AI 결과를 볼 수 있어요.</p><input id="report-admin-password" type="password" placeholder="관리자 비밀번호"><input id="report-admin-two-factor" type="password" inputmode="numeric" placeholder="2차 인증 코드"><button onclick="loadAdminReports()">문의 불러오기</button></div>`,
-  );
-}
+function openAdminReports(){loadAdminReports();}
 async function loadAdminReports() {
-  const password = document.querySelector("#report-admin-password")?.value;
-  const twoFactor = document.querySelector("#report-admin-two-factor")?.value;
-  if (!password || !twoFactor) return alert("관리자 비밀번호와 2차 인증 코드를 입력해주세요.");
   try {
-    const reports = await api(`/api/admin/reports?password=${encodeURIComponent(password)}&two_factor=${encodeURIComponent(twoFactor)}`);
+    const reports = await api("/api/admin/reports");
     const rows = reports.length ? reports.map((report) => `<article><header><b>${esc(report.reporter_name)}</b><small>${esc(report.created)}</small></header><p><strong>원문</strong> ${esc(report.original_text)}</p>${report.ai_result ? `<p><strong>AI 결과</strong> ${esc(report.ai_result)}</p>` : ""}</article>`).join("") : `<div class="empty-chat"><b>접수된 문의가 없어요</b><span>사용자가 AI 제안에 문의하면 이곳에 표시돼요.</span></div>`;
     closePopup();
     popup(`<div class="admin-reports report-list"><span>AI 문의 관리</span><h2>접수된 문의</h2><div>${rows}</div><button onclick="closePopup()">닫기</button></div>`);
@@ -1336,7 +1349,7 @@ async function setAiIntervention(level) {
   renderDetailedAiSettings();
 }
 async function logout() {
-  try { await api("/api/auth/logout", {method:"POST"}); }
+  try { await api(isAdmin?"/api/auth/admin-logout":"/api/auth/logout", {method:"POST"}); }
   catch { return alert("로그아웃을 완료하지 못했어요. 연결을 확인하고 다시 눌러 주세요."); }
   roomLoadVersion += 1;
   stopRoomPolling();
@@ -1348,6 +1361,9 @@ async function logout() {
     "retone-v2-ai-level",
     "retone-v2-admin",
   ].forEach((k) => sessionStorage.removeItem(k));
+  aiSavedResults={};factFindings={};
+  localStorage.removeItem("retone-ai-results-v1");localStorage.removeItem("retone-citations-v3");
+  serverAiPolicies.clear();roomSyncCursors.clear();
   signedIn = "";
   signedInId = "";
   sessionToken = "";
@@ -1431,7 +1447,7 @@ function saveFactFindings() {
   } catch {}
 }
 async function queueFactChecks(messages) {
-  if (aiDetails()["출처 확인 제안"] === "끄기") return;
+  if(activeAiIntervention()==="off"||aiDetails()["출처 확인 제안"]==="끄기")return;
   const candidates = messages
     .filter((message) => !message.mine && likelyFactualClaim(message.body))
     .slice(-3);
@@ -1447,6 +1463,7 @@ async function queueFactChecks(messages) {
         method: "POST",
         body: JSON.stringify({ message_id: message.id }),
       });
+      if(result.status==="disabled")continue;
       factFindings[message.id] = { ...result, version: FACT_FINDING_VERSION };
       saveFactFindings();
       if (roomId === message.room_id && (result.status === "check" || result.sources?.length))
@@ -1488,7 +1505,7 @@ function view(m) {
   const image = m.image_url
     ? `<button type="button" class="chat-image-button" aria-label="사진 크게 보기" onpointerdown="event.stopPropagation()" onclick="event.stopPropagation();openImageViewer('${m.id}')"><img class="chat-image" src="${escAttr(m.image_url)}" alt="${escAttr(m.sender)}님이 보낸 사진"></button><small class="image-message-label">눌러서 크게 보기</small>`
     : "";
-  return `<article class="bubble ${m.mine ? "mine" : ""}" data-message-id="${esc(m.id)}" ${tap} ${press}><div class="meta"><span>${esc(m.sender)}</span>${messageMenu}</div>${quote}${image}${m.body ? `<span>${esc(m.body)}</span>` : ""}<div class="bubble-tools">${contextCue}${factCue}${replyButton}${m.mine && m.unread ? `<span class="read">${m.unread}</span>` : ""}</div></article>`;
+  return `<article class="bubble ${m.mine ? "mine" : ""}" data-message-id="${esc(m.id)}" ${tap} ${press}><div class="meta"><span>${esc(m.sender)}</span>${messageMenu}</div>${quote}${image}${m.body ? `<span>${esc(m.body)}</span>` : ""}<div class="bubble-tools">${contextCue}${factCue}${replyButton}${reactionMarkup(m)}${m.mine && m.unread ? `<span class="read">${m.unread}</span>` : ""}</div></article>`;
 }
 function openImageViewer(id) {
   const message = currentRoomMessages.find((item) => item.id === id);
@@ -1639,6 +1656,7 @@ function focusReply(id) {
   setTimeout(() => target.classList.remove("reply-focused"), 900);
 }
 function conversationPulse() {
+  if (activeAiIntervention()==="off")return "";
   if (aiDetails()["대화 흐름 요약"] === "끄기") return "";
   return `<button class="conversation-pulse" onclick="openConflictGuide()"><span>대화 흐름</span><b>눌러서 분석</b></button>`;
 }
@@ -1648,6 +1666,7 @@ function openConversationPulse() {
   );
 }
 async function openConflictGuide() {
+  if(activeAiIntervention()==="off"||aiDetails()["대화 흐름 요약"]==="끄기")return alert("이 AI 기능은 꺼져 있어요.");
   popup(
     `<div class="ai-check info analysis-loading"><div class="thinking-loader" aria-label="AI 분석 중"><i></i><i></i><i></i></div><span>대화 흐름 분석 중</span><h2>최근 맥락을 살펴보고 있어요</h2><p>누가 맞는지 판단하지 않고, 지금 대화의 주제와 엇갈릴 수 있는 지점만 정리해요.</p><small>AI가 생각하고 있어요</small></div>`,
   );
@@ -1718,7 +1737,7 @@ function viewAppointment(item) {
   const ownerAction = item.owner_id === signedInId ? `<button class="quiet danger" onclick="confirmDeleteAppointment('${item.id}')">모두에게 삭제</button>` : "";
   const alreadyApproved = item.pending_change?.approvals?.includes(signedInId);
   const pending = item.pending_change ? `<p class="appointment-pending"><strong>변경 동의 대기</strong> ${item.pending_change.approvals.length}/${item.pending_change.required}</p>${alreadyApproved?`<small class="appointment-waiting">내 동의 완료 · 다른 구성원을 기다리는 중</small>`:`<button onclick="approveAppointmentChange('${item.id}')">변경안 동의</button>`}` : "";
-  return `<article class="appointment-card"><span>◷ 함께 정한 약속</span><b>${esc(item.title)}</b><p><strong>${esc(item.date)}</strong>${item.place ? ` · ${esc(item.place)}` : ""}</p>${(item.fields||[]).map(f=>`<p><strong>${esc(f.label)}</strong> · ${esc(f.value)}</p>`).join("")}${pending}<div class="appointment-actions">${item.pending_change?"":`<button class="quiet" onclick="editAppointment('${item.id}')">수정 제안</button>`}<button class="quiet" onclick="hideAppointment('${item.id}')">내 화면에서 숨기기</button>${ownerAction}</div></article>`;
+  return `<article class="appointment-card"><span>◷ 함께 정한 약속</span><b>${esc(item.title)}</b><p><strong>${esc(displayAppointmentDate(item.date))}</strong>${item.place ? ` · ${esc(item.place)}` : ""}</p>${(item.fields||[]).map(f=>`<p><strong>${esc(f.label)}</strong> · ${esc(f.value)}</p>`).join("")}${pending}<div class="appointment-actions">${item.pending_change?"":`<button class="quiet" onclick="editAppointment('${item.id}')">수정 제안</button>`}<button class="quiet" onclick="hideAppointment('${item.id}')">내 화면에서 숨기기</button>${ownerAction}</div></article>`;
 }
 
 function visibleAppointments(items) {
@@ -1738,11 +1757,11 @@ function appointmentNotice(items) {
     .filter((item)=>appointmentTime(item)<now && localStorage.getItem(`retone-appointment-past-seen-${signedInId}-${item.id}`)!=="1")
     .sort((a,b)=>appointmentTime(b)-appointmentTime(a))[0];
   if (past) {
-    return `<div class="appointment-notice past"><button class="appointment-notice-body" onclick="openAppointmentDetails('${past.id}')"><span class="appointment-notice-icon">✓</span><span><small>지난 일정 · 확인이 필요해요</small><b>${esc(past.title)}</b><em>${esc(past.date)}${past.place?` · ${esc(past.place)}`:""}</em></span><i>›</i></button><button class="past-appointment-confirm" onclick="acknowledgePastAppointment('${past.id}')">확인</button></div>`;
+    return `<div class="appointment-notice past"><button class="appointment-notice-body" onclick="openAppointmentDetails('${past.id}')"><span class="appointment-notice-icon">✓</span><span><small>지난 일정 · 확인이 필요해요</small><b>${esc(past.title)}</b><em>${esc(displayAppointmentDate(past.date))}${past.place?` · ${esc(past.place)}`:""}</em></span><i>›</i></button><button class="past-appointment-confirm" onclick="acknowledgePastAppointment('${past.id}')">확인</button></div>`;
   }
   const item = visible.find((appointment)=>appointmentTime(appointment)>=now);
   if (!item) return "";
-  return `<button class="appointment-notice" onclick="openAppointmentDetails('${item.id}')"><span class="appointment-notice-icon">◷</span><span><small>약속 공지${visible.length>1?` · 외 ${visible.length-1}개`:""}</small><b>${esc(item.title)}</b><em>${esc(item.date)}${item.place?` · ${esc(item.place)}`:""}</em></span><i>›</i></button>`;
+  return `<button class="appointment-notice" onclick="openAppointmentDetails('${item.id}')"><span class="appointment-notice-icon">◷</span><span><small>약속 공지${visible.length>1?` · 외 ${visible.length-1}개`:""}</small><b>${esc(item.title)}</b><em>${esc(displayAppointmentDate(item.date))}${item.place?` · ${esc(item.place)}`:""}</em></span><i>›</i></button>`;
 }
 function acknowledgePastAppointment(id) {
   localStorage.setItem(`retone-appointment-past-seen-${signedInId}-${id}`, "1");
@@ -1752,7 +1771,7 @@ function openAppointmentDetails(id) {
   const item=(data.appointments||[]).find((appointment)=>appointment.id===id);
   if (!item) return alert("약속을 찾지 못했어요.");
   const canApprove=item.pending_change && !item.pending_change.approvals?.includes(signedInId);
-  popup(`<div class="appointment-detail"><span>◷ 약속 공지</span><h2>${esc(item.title)}</h2><p><strong>날짜와 시간</strong><br>${esc(item.date)}</p><p><strong>장소</strong><br>${esc(item.place||"장소 미정")}</p>${(item.fields||[]).map(field=>`<p><strong>${esc(field.label)}</strong><br>${esc(field.value)}</p>`).join("")}${item.pending_change?`<div class="appointment-change-preview"><b>수정 제안이 있어요</b><span>${esc(item.pending_change.title)} · ${esc(item.pending_change.date)}</span><small>동의 ${item.pending_change.approvals.length}/${item.pending_change.required}</small></div>`:""}<div class="modal-actions"><button class="quiet" onclick="closePopup();hideAppointment('${item.id}')">내 화면에서 숨기기</button>${item.pending_change?"":`<button onclick="closePopup();editAppointment('${item.id}')">수정 제안</button>`}${canApprove?`<button onclick="approveAppointmentChange('${item.id}')">변경안 동의</button>`:""}</div></div>`);
+  popup(`<div class="appointment-detail"><span>◷ 약속 공지</span><h2>${esc(item.title)}</h2><p><strong>날짜와 시간</strong><br>${esc(displayAppointmentDate(item.date))}</p><p><strong>장소</strong><br>${esc(item.place||"장소 미정")}</p>${(item.fields||[]).map(field=>`<p><strong>${esc(field.label)}</strong><br>${esc(field.value)}</p>`).join("")}${item.pending_change?`<div class="appointment-change-preview"><b>수정 제안이 있어요</b><span>${esc(item.pending_change.title)} · ${esc(item.pending_change.date)}</span><small>동의 ${item.pending_change.approvals.length}/${item.pending_change.required}</small></div>`:""}<div class="modal-actions"><button class="quiet" onclick="closePopup();hideAppointment('${item.id}')">내 화면에서 숨기기</button>${item.pending_change?"":`<button onclick="closePopup();editAppointment('${item.id}')">수정 제안</button>`}${canApprove?`<button onclick="approveAppointmentChange('${item.id}')">변경안 동의</button>`:""}</div></div>`);
 }
 function hideAppointment(id) {
   localStorage.setItem(`retone-appointment-hidden-${signedInId}-${id}`,"1");
@@ -1857,6 +1876,7 @@ async function factCheckPending(button, id) {
   }
 }
 function openAiHelp() {
+  if(activeAiIntervention()==="off"||aiDetails()["감정 도움 AI"]==="끄기")return alert("이 AI 기능은 꺼져 있어요.");
   if (aiDetails()["감정 도움 AI"] === "끄기") return;
   popup(
     `<div class="ai-check info ai-help-card"><span>AI 도움받기</span><h2>지금 마음이나 전하고 싶은 말을 적어봐요</h2><p>판단하지 않고, 감정을 정리하거나 상대에게 전할 말을 함께 찾아볼게요.</p><textarea id="ai-help-text" rows="4" placeholder="예: 너무 서운한데 싸우고 싶진 않아" onkeydown="if((event.ctrlKey||event.metaKey)&&event.key==='Enter'){event.preventDefault();askAiHelp()}"></textarea><small class="ai-help-hint">Ctrl/⌘ + Enter로 바로 보낼 수 있어요.</small><div id="ai-help-response" aria-live="polite"></div><button id="ai-help-submit" onclick="askAiHelp()">AI와 이야기하기</button></div>`,
@@ -1933,6 +1953,7 @@ function queueAiCheck(value) {
 }
 async function runAiCheck(text) {
   if (aiPrefetch.text !== text) return;
+  await aiPreferenceWrites;
   setAiStatus("AI 확인 중", true);
   const request = api("/api/ai/check", {
     method: "POST",
@@ -2454,7 +2475,7 @@ function addScheduleField(button) {
 }
 function appointmentEditorMarkup(item = null, sourceId = "", draftTitle = "") {
   const editing = Boolean(item);
-  const date = item?.date ? String(item.date).replace(" ", "T").slice(0, 16) : "";
+  const date = item?.date ? localDateTimeValue(new Date(String(item.date).replace(" ","T"))) : "";
   return `<div class="schedule-editor appointment-editor" data-client="${crypto.randomUUID()}" data-source="${escAttr(sourceId)}" data-room="${escAttr(roomId)}"><span>${editing ? "공동 약속 수정" : "함께할 약속"}</span><h2>${editing ? "서로 약속을 바꿔볼까요?" : "약속을 함께 정해요"}</h2><p>${editing ? "이 방의 참여자는 시간·장소·내용을 최신 계획으로 함께 바꿀 수 있어요." : "회의·보이스톡·만남 일정을 달력에서 골라 바로 공유해요."}</p><label>약속 이름<input id="appointmentTitle" value="${escAttr(item?.title || draftTitle)}" placeholder="예: 발표 방향 짧은 회의"></label><label>날짜와 시간<div class="quick-date"><button type="button" onclick="setQuickDate('appointmentDate',0)">오늘</button><button type="button" onclick="setQuickDate('appointmentDate',1)">내일</button></div><input id="appointmentDate" type="datetime-local" value="${escAttr(date)}"></label><label>장소 또는 온라인 링크<input id="appointmentPlace" value="${escAttr(item?.place === "장소 미정" ? "" : item?.place || "")}" placeholder="예: 교실, 디스코드, Google Meet"></label><div class="schedule-fields">${(item?.fields || []).map(scheduleFieldMarkup).join("")}</div><button type="button" class="quiet" onclick="addScheduleField(this)">＋ 세부 항목</button><button onclick="saveAppointment('${item?.id || ""}')">${editing ? "변경 사항 공유하기" : "약속 공유하기"}</button></div>`;
 }
 function editAppointment(id) {
@@ -2517,7 +2538,7 @@ async function saveAppointment(id = "") {
         title,
         fields,
         ...(id ? {} : { room_id: editor.dataset.room || null, client_id: editor.dataset.client, source_message_id:editor.dataset.source || null }),
-        date: date.replace("T", " "),
+        date: new Date(date).toISOString(),
         place: document.querySelector("#appointmentPlace").value.trim(),
       }),
     });
@@ -2841,42 +2862,26 @@ async function completeSignup() {
       "retone-v2-ai-consent",
       signupDraft.consent || aiIntervention === "off" ? "yes" : "",
     );
+    localStorage.setItem(aiSensitivityKey(),JSON.stringify({...sensitivity,categoryVersion:3}));
+    await persistAiPreferences();
     signupDraft = null;
     home();
   } catch {
     alert("이미 가입된 전화번호이거나 입력값을 확인해주세요.");
   }
 }
-async function finishAdminLogin() {
-  const password = document.querySelector("#admin-password").value;
-  const two_factor = document.querySelector("#admin-two-factor").value;
-  if (!password || !two_factor)
-    return alert("비밀번호와 2차 인증 코드를 모두 입력해주세요.");
-  try {
-    const user = await api("/api/auth/admin-login", {
-      method: "POST",
-      body: JSON.stringify({ password, two_factor }),
-    });
-    signedIn = user.name;
-    signedInId = user.id;
-    aiIntervention = "off";
-    isAdmin = true;
-    sessionStorage.setItem("retone-v2-name", user.name);
-    sessionStorage.setItem("retone-v2-user-id", user.id);
-    sessionStorage.setItem("retone-v2-ai-level", "off");
-    sessionStorage.setItem("retone-v2-admin", "yes");
-    settings();
-  } catch (error) {
-    if (error?.status === 403) {
-      alert(
-        "관리자 접근이 허용되지 않았어요. 관리자 계정 상태와 서버 설정을 확인해주세요.",
-      );
-    } else if (error?.status === 401) {
-      alert("관리자 비밀번호 또는 2차 인증 코드가 맞지 않아요.");
-    } else {
-      alert("관리자 로그인을 확인하지 못했어요. 서버가 배포 중인지 잠시 후 다시 시도해주세요.");
-    }
+async function finishAdminLogin(){
+ const password=document.querySelector("#admin-password").value;
+ const two_factor=document.querySelector("#admin-two-factor")?.value||"";
+ if(!password)return alert("관리자 비밀번호를 입력해주세요.");
+ try{
+  const result=await api("/api/auth/admin-login",{method:"POST",body:JSON.stringify({password,two_factor})});
+  if(result.setup_required){
+   adminSetupPassword=password;
+   popup(`<div class="admin-otp-setup"><h2>관리자 인증 앱 연결</h2><p>인증 앱에서 QR을 스캔하거나 아래 키를 등록한 뒤 6자리 번호를 입력해주세요. 이 화면은 최초 연결할 때만 표시됩니다.</p><div class="qr-image">${result.qr_svg}</div><code>${esc(result.secret)}</code><input id="admin-enroll-code" inputmode="numeric" autocomplete="one-time-code" maxlength="6" placeholder="인증 앱의 6자리 번호"><button onclick="finishAdminEnrollment()">인증하고 로그인</button><button class="quiet" onclick="adminSetupPassword='';closePopup()">취소</button></div>`);return;
   }
+  completeAdminSession(result);
+ }catch(error){alert(error.status===429?"로그인 시도가 많아요. 15분 뒤 다시 시도해주세요.":"관리자 비밀번호와 인증 앱의 새 번호를 확인해주세요.");}
 }
 function setSignupAiDetail(button, name, value) {
   signupAiDetails = { ...(signupAiDetails || aiDetails()), [name]: value };
@@ -2925,6 +2930,7 @@ async function finishAuth(mode) {
       "retone-v2-ai-consent",
       consent || aiIntervention === "off" ? "yes" : "",
     );
+    await hydrateAiPreferences();
     home();
   } catch (error) {
     if (error.status === 429) return alert("로그인에 5번 실패했어요. 15분 뒤 다시 시도해 주세요.");
@@ -2936,7 +2942,10 @@ async function finishAuth(mode) {
   }
 }
 async function restoreLogin() {
-  if (isAdmin) return start();
+  if(isAdmin){
+    try{const user=await api("/api/auth/admin-me");signedIn=user.name;signedInId="admin";return start();}
+    catch{isAdmin=false;signedIn=signedInId="";sessionStorage.removeItem("retone-v2-admin");}
+  }
   try {
     const headers = sessionToken ? {Authorization: `Bearer ${sessionToken}`} : {};
     const user = await api("/api/auth/me", {headers});
@@ -2944,6 +2953,7 @@ async function restoreLogin() {
     signedIn = user.name;
     signedInId = user.id;
     aiIntervention = user.ai_intervention;
+    await hydrateAiPreferences();
     sessionStorage.setItem("retone-v2-name",user.name);
     sessionStorage.setItem("retone-v2-user-id",user.id);
     sessionStorage.setItem("retone-v2-ai-level",aiIntervention);
@@ -2960,4 +2970,71 @@ async function restoreLogin() {
   sessionStorage.removeItem("retone-v2-session");
   start();
 }
+
+function aiSensitivityKey(){return `retone-ai-sensitivity-${signedInId||"signup"}`;}
+async function hydrateAiPreferences(){
+ const result=await api("/api/ai/preferences");aiIntervention=result.level;
+ if(result.settings?.sensitivity)localStorage.setItem(aiSensitivityKey(),JSON.stringify(result.settings.sensitivity));
+ for(const [id,value]of Object.entries(result.rooms||{}))localStorage.setItem(roomPreferenceKey("ai",id),JSON.stringify(value));
+ serverAiPolicies.clear();
+}
+async function persistAiPreferences(){
+ if(!signedInId||isAdmin)return;
+ clearTimeout(aiPreferenceTimer);
+ aiPreferenceWrites=aiPreferenceWrites.catch(()=>{}).then(()=>api(`/api/users/${signedInId}/preferences`,{method:"PATCH",body:JSON.stringify({ai_intervention:aiIntervention})}));
+ return aiPreferenceWrites;
+}
+function completeAdminSession(user){
+ adminSetupPassword="";signedIn=user.name;signedInId="admin";aiIntervention="off";isAdmin=true;
+ sessionStorage.setItem("retone-v2-name",signedIn);sessionStorage.setItem("retone-v2-user-id",signedInId);sessionStorage.setItem("retone-v2-ai-level","off");sessionStorage.setItem("retone-v2-admin","yes");closePopup();settings();
+}
+async function finishAdminEnrollment(){
+ const code=document.querySelector("#admin-enroll-code").value.trim();
+ try{completeAdminSession(await api("/api/auth/admin-login",{method:"POST",body:JSON.stringify({password:adminSetupPassword,two_factor:code})}));}
+ catch{alert("인증 앱에 표시된 새 6자리 번호를 확인해주세요.");}
+}
+function mergeRoomUpdate(result){
+ if(result.snapshot===undefined)return result.messages||[];
+ const removed=new Set(result.removed||[]),incoming=result.messages||[];
+ const oldest=currentRoomMessages[0]?.created??Infinity;
+ let previous=currentRoomMessages;
+ if(result.snapshot&&incoming.length){const first=incoming[0].created;previous=previous.filter(m=>m.created<first);}
+ const map=new Map(previous.filter(m=>!removed.has(m.id)).map(m=>[m.id,m]));
+ for(const message of incoming)if(result.snapshot||map.has(message.id)||message.created>=oldest)map.set(message.id,message);
+ return [...map.values()].sort((a,b)=>a.created-b.created||a.id.localeCompare(b.id));
+}
+async function loadOlderMessages(button){
+ if(button.disabled||!currentRoomMessages.length)return;button.disabled=true;
+ const room=roomId,list=document.querySelector("#messages"),height=list.scrollHeight;
+ try{
+  const older=await api(`/api/rooms/${room}/messages?before=${currentRoomMessages[0].id}&limit=50`);
+  if(roomId!==room||!list.isConnected)return;
+  const map=new Map([...older,...currentRoomMessages].map(m=>[m.id,m]));
+  reconcileBubbles(list,[...map.values()].sort((a,b)=>a.created-b.created||a.id.localeCompare(b.id)));
+  list.scrollTop+=list.scrollHeight-height;
+  if(older.length<50){button.textContent="처음 대화까지 불러왔어요";return;}
+ }catch{alert("이전 대화를 불러오지 못했어요.");}button.disabled=false;
+}
+function reactionMarkup(message){
+ const reactions=message.reactions||[];
+ return `<span class="reaction-bar">${reactions.map(r=>`<button type="button" class="reaction-count ${r.mine?"selected":""}" aria-pressed="${Boolean(r.mine)}" aria-label="${escAttr(r.emoji)} 반응 ${r.count}명" onpointerdown="event.stopPropagation()" onclick="event.stopPropagation();toggleReaction('${message.id}','${r.emoji}',${!r.mine})">${r.emoji}<small>${r.count}</small></button>`).join("")}<button type="button" class="reaction-add" aria-label="이모지 반응 추가" onpointerdown="event.stopPropagation()" onclick="event.stopPropagation();openReactions('${message.id}')">☺＋</button></span>`;
+}
+function openReactions(id){
+ const message=currentRoomMessages.find(m=>m.id===id);if(!message)return;
+ popup(`<div class="reaction-picker"><h2>이모지 반응</h2>${["👍","❤️","😂","👏","✅"].map(emoji=>`<button aria-label="${emoji} 반응" onclick="toggleReaction('${id}','${emoji}',${!message.reactions?.some(r=>r.emoji===emoji&&r.mine)});closePopup()">${emoji}</button>`).join("")}</div>`);
+}
+async function toggleReaction(id,emoji,active){
+ const room=roomId;
+ try{
+  const result=await api(`/api/rooms/${room}/messages/${id}/reactions`,{method:"POST",body:JSON.stringify({emoji,active})});
+  if(roomId!==room)return;
+  const message=currentRoomMessages.find(m=>m.id===id);if(message){message.reactions=result.reactions;const node=document.querySelector(`[data-message-id="${id}"]`);if(node)node.outerHTML=view(message);}
+ }catch{alert("반응을 저장하지 못했어요.");}
+}
+function displayAppointmentDate(value){
+ const date=new Date(String(value||"").replace(" ","T"));
+ return Number.isFinite(date.getTime())?new Intl.DateTimeFormat("ko-KR",{year:"numeric",month:"long",day:"numeric",hour:"2-digit",minute:"2-digit"}).format(date):value;
+}
+
 restoreLogin();
+
