@@ -1,4 +1,4 @@
-name: AI regression checks
+name: Combined ReTone checks
 on:
   push:
   pull_request:
@@ -7,26 +7,49 @@ permissions:
 jobs:
   regression:
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: retone
+          POSTGRES_PASSWORD: retone_test
+          POSTGRES_DB: retone_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U retone -d retone_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    env:
+      DATABASE_URL: postgres://retone:retone_test@127.0.0.1:5432/retone_test
+      RETONE_INSECURE_COOKIES: "true"
+      PORT: "4000"
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@1.89.0
+      - uses: dtolnay/rust-toolchain@1.100.0
       - uses: actions/setup-node@v4
         with:
-          node-version: '22'
+          node-version: "22"
       - run: cargo test --locked
       - run: node --check public/app.js
-      - run: node tests/frontend.mjs
-      - run: node tests/outgoing-schedules.mjs
-      - name: Check schedule editor in Chrome
+      - name: Check combined frontend behavior
         run: |
-          google-chrome --headless --disable-gpu --allow-file-access-from-files --dump-dom "file://$PWD/tests/schedule-editor.html" > "$RUNNER_TEMP/card-editor.html"
-          grep -F '<pre id="result">PASS: schedule editor regression</pre>' "$RUNNER_TEMP/card-editor.html"
-      - name: Test chat and deletion between two browser sessions
+          npm install --no-audit --no-fund --prefix "$RUNNER_TEMP/retone-frontend" jsdom@22.1.0
+          NODE_PATH="$RUNNER_TEMP/retone-frontend/node_modules" node tests/frontend-regressions.cjs
+      - name: Check server against existing database schema
         run: |
+          git show 251243e00effd021db33bc403b0ca14702dd52c5:migrations/0001_retone_v2.sql > "$RUNNER_TEMP/previous-schema.sql"
+          psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f "$RUNNER_TEMP/previous-schema.sql"
           cargo build --locked
-          npm install --no-audit --no-fund --prefix "$RUNNER_TEMP/retone-browser" playwright-core@1.56.1
-          ENABLE_TEST_LOGINS=true RETONE_INSECURE_COOKIES=true PORT=4000 ./target/debug/retone-v2 &
+          ./target/debug/retone-v2 > "$RUNNER_TEMP/retone-server.log" 2>&1 &
           server_pid=$!
-          trap 'kill "$server_pid"' EXIT
-          curl --fail --retry 10 --retry-connrefused --retry-delay 1 http://127.0.0.1:4000/api/health
-          NODE_PATH="$RUNNER_TEMP/retone-browser/node_modules" CHROME_PATH="$(command -v google-chrome)" node tests/chat-flow.cjs
+          trap 'kill "$server_pid" 2>/dev/null || true' EXIT
+          for attempt in $(seq 1 30); do
+            if curl --silent --fail http://127.0.0.1:4000/api/health > /dev/null; then break; fi
+            sleep 1
+          done
+          if ! node tests/deployment-smoke.cjs; then
+            cat "$RUNNER_TEMP/retone-server.log"
+            exit 1
+          fi
