@@ -9,7 +9,8 @@ async function request(path, {session, method='GET', body, expected=200} = {}) {
     ...(body === undefined ? {} : {body:JSON.stringify(body)})
   });
   assert.equal(response.status, expected, method + ' ' + path);
-  const value = expected === 204 ? null : await response.json();
+  const text = await response.text();
+  const value = text ? JSON.parse(text) : null;
   return {value, cookie:response.headers.get('set-cookie')?.split(';')[0]};
 }
 async function main() {
