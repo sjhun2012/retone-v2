@@ -71,11 +71,14 @@ pub(super) async fn fact_check(
         lock
     };
     let _guard = guard.lock().await;
-    let (body, cached) = sqlx::query_as::<_,(String,Option<Value>)>(
-        "SELECT m.body,m.fact_result FROM retone_v2.messages m JOIN retone_v2.room_members rm ON rm.room_id=m.room_id
+    let (room,body, cached) = sqlx::query_as::<_,(Uuid,String,Option<Value>)>(
+        "SELECT m.room_id,m.body,m.fact_result FROM retone_v2.messages m JOIN retone_v2.room_members rm ON rm.room_id=m.room_id
          WHERE m.id=$1 AND rm.user_id=$2 AND m.deleted_at IS NULL")
         .bind(message).bind(user).fetch_optional(&app.db).await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
         .ok_or(StatusCode::NOT_FOUND)?;
+    let policy=ai_policy::load(&app,user,Some(room)).await?;
+    if !policy.allows("출처 확인 제안"){return Ok(Json(json!({"status":"disabled","sources":[]})));}
+    security::limit(&app,format!("ai:{user}"),40).await?;
     if let Some(cached) = cached {
         return Ok(Json(cached));
     }
@@ -129,3 +132,4 @@ mod tests {
         );
     }
 }
+

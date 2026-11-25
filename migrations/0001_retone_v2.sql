@@ -172,3 +172,4 @@ ALTER TABLE retone_v2.messages ADD COLUMN IF NOT EXISTS alignment_kind TEXT;
 ALTER TABLE retone_v2.messages ADD COLUMN IF NOT EXISTS alignment_summary TEXT;
 ALTER TABLE retone_v2.agreements ADD COLUMN IF NOT EXISTS source_message_id UUID REFERENCES retone_v2.messages(id) ON DELETE SET NULL;
 CREATE UNIQUE INDEX IF NOT EXISTS agreement_source_unique ON retone_v2.agreements(source_message_id) WHERE source_message_id IS NOT NULL;
+

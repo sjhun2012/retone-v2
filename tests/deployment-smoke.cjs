@@ -15,7 +15,7 @@ async function request(path, {session, method='GET', body, expected=200} = {}) {
 }
 async function main() {
   const health = await request('/api/health');
-  assert.equal(health.value.version, 'v2-combined-20261125');
+  assert.equal(health.value.version, 'v2-safety-20261125');
   assert.equal(health.value.storage, true);
   const credentials = [
     {name:'Deployment Alice',phone:'01099990001',password:'Testpass1!',ai_intervention:'off'},
@@ -52,3 +52,4 @@ async function main() {
   console.log('Deployment smoke passed: migration, auth, friendship, chat, typing, schedule approval, logout and login.');
 }
 main().catch(error=>{console.error(error);process.exitCode=1});
+

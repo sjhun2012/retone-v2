@@ -25,6 +25,9 @@ jobs:
       DATABASE_URL: postgres://retone:retone_test@127.0.0.1:5432/retone_test
       RETONE_INSECURE_COOKIES: "true"
       PORT: "4000"
+      RETONE_PHONE_SECRET: "local-ci-phone-key-32-characters-long"
+      RETONE_ADMIN_PASSWORD: "CI-admin-test-password-only"
+      RETONE_ADMIN_TOTP_SECRET: "GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ"
     steps:
       - uses: actions/checkout@v4
         with:
@@ -55,3 +58,4 @@ jobs:
             cat "$RUNNER_TEMP/retone-server.log"
             exit 1
           fi
+
