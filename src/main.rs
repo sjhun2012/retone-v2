@@ -2440,7 +2440,7 @@ async fn create_conversation_insight(
     headers: HeaderMap,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
     let user_id = require_user(&app, &headers).await?;
-    ai_policy::require(&app,user_id,Some(room_id),"대화 흐름 요약").await?;
+    ai_policy::require(&app,user_id,Some(Uuid::parse_str(&room_id).map_err(|_|StatusCode::BAD_REQUEST)?),"대화 흐름 요약").await?;
     let room_uuid = Uuid::parse_str(&room_id).map_err(|_| StatusCode::BAD_REQUEST)?;
     require_room_member(&app, room_uuid, user_id).await?;
     let (checkpoint, history, previous_summary) = {
