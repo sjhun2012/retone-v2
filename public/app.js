@@ -338,6 +338,7 @@ async function home() {
     .sort((a, b) => a.date.localeCompare(b.date))[0];
   app.innerHTML = `<main class="layout">${rail()}<section class="page"><header class="head"><h1>채팅</h1><button class="new-room" onclick="newRoom()">＋ 새 대화</button></header><div class="content"><div class="intro"><h2>${esc(signedIn)}님, 반가워요.</h2><p>친구를 초대해 첫 대화를 시작해 보세요.</p></div><div class="dash"><section class="focus"><b>오늘의 공동 확인</b><span>채팅방에서 함께 확인할 일을 만들어 보세요.</span></section><section class="focus schedule"><b>다음 약속 <button onclick="newAppointment()">＋</button></b><span>${upcoming ? `${esc(upcoming.title)} · ${esc(upcoming.date)}` : "친구들과 약속을 정하면 여기에 보여요."}</span></section></div><div class="rooms">${rooms.length ? rooms.map((r) => `<button class="room" data-room-id="${esc(r.id)}" onclick="openRoom('${r.id}')"><span class="avatar">${avatarContent(r.name, r.avatar_url)}</span><span class="copy"><b>${r.pinned ? "📌 " : ""}${esc(r.name)}</b><span class="room-last">${esc(r.last)}</span></span>${r.unread ? `<span class="badge">${r.unread}</span>` : ""}</button>`).join("") : `<button class="empty-chat" onclick="newRoom()"><b>아직 대화가 없어요</b><span>친구를 초대하거나 단체 채팅을 만들어 보세요. ＋</span></button>`}</div></div></section></main>`;
   startInboxPolling(data);
+  openPendingFriendInvite();
 }
 async function openRoom(id) {
   stopInboxPolling();
@@ -753,8 +754,26 @@ async function loadMyFriendQr() {
   }
 }
 function friendCodeFromQr(value) {
-  const matched = String(value || "").trim().match(/^RETONE-FRIEND:([A-Z0-9-]+)$/i);
-  return matched ? matched[1].toUpperCase() : "";
+  const raw = String(value || "").trim();
+  const legacy = raw.match(/^RETONE-FRIEND:([A-Z0-9]{6})$/i);
+  if (legacy) return legacy[1].toUpperCase();
+  try {
+    const url = new URL(raw);
+    if (url.protocol !== "https:" || url.username || url.password ||
+        ![window.location.origin, "https://retone-v2-mygr.onrender.com"].includes(url.origin)) return "";
+    const code = url.pathname === "/friend.html" ? url.searchParams.get("code") : url.pathname === "/" ? url.searchParams.get("friend") : "";
+    return /^[A-Z0-9]{6}$/i.test(code || "") ? code.toUpperCase() : "";
+  } catch { return ""; }
+}
+function openPendingFriendInvite() {
+  const url = new URL(window.location.href);
+  const code = url.searchParams.get("friend");
+  if (!signedInId || !/^[A-Z0-9]{6}$/i.test(code || "")) return;
+  url.searchParams.delete("friend");
+  window.history.replaceState(null, "", url.pathname + url.search + url.hash);
+  openFriendAdd("code");
+  document.querySelector("#friend-code").value = code.toUpperCase();
+  lookupFriend("code");
 }
 let qrDecoderPromise = null;
 function loadQrDecoder() {
@@ -850,7 +869,7 @@ async function shareFriendCode() {
   if (!code) {
     try { code = (await getFriendIdentity()).friend_code; } catch { return alert("친구코드를 불러오지 못했어요. 잠시 후 다시 시도해주세요."); }
   }
-  const text = `Re:Tone 친구코드: ${code}`;
+  const text = `Re:tone 친구 추가: https://retone-v2-mygr.onrender.com/friend.html?code=${encodeURIComponent(code)}`;
   if (navigator.share) {
     try { await navigator.share({ title: "Re:Tone 친구 추가", text }); return; } catch {}
   }
@@ -2961,3 +2980,4 @@ async function restoreLogin() {
   start();
 }
 restoreLogin();
+

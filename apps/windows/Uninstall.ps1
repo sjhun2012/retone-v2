@@ -11,5 +11,9 @@ foreach ($folder in @([Environment]::GetFolderPath('DesktopDirectory'), [Environ
 }
 $registryPath = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\Retone'
 if (Test-Path -LiteralPath $registryPath) { Remove-Item -LiteralPath $registryPath }
+$protocolPath = 'HKCU:\Software\Classes\retone'
+if ((Test-Path -LiteralPath $protocolPath) -and (Get-ItemProperty -LiteralPath $protocolPath).RetoneOwner -eq $installDirectory) {
+    Remove-Item -LiteralPath $protocolPath -Recurse
+}
 Remove-Item -LiteralPath $installDirectory -Recurse -Force
 [Windows.Forms.MessageBox]::Show('Re:tone 앱을 제거했습니다.', 'Re:tone') | Out-Null

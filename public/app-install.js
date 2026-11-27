@@ -14,10 +14,12 @@
   let queued = false;
   function attach() {
     queued = false;
-    const host = document.querySelector('.auth-card') || document.querySelector('.rail small');
+    const host = document.querySelector('.chat > .head .chat-actions') ||
+      document.querySelector('.page > .head') || document.querySelector('.rail small');
     if (!host || host.querySelector('.retone-install-link')) return;
     const link = document.createElement('a');
-    link.className = 'retone-install-link'; link.href = '/install.html'; link.textContent = 'Re:tone 앱 설치';
+    link.className = 'retone-install-link'; link.href = '/install.html';
+    link.textContent = '앱 다운로드'; link.setAttribute('aria-label', 'Re:tone 앱 다운로드');
     host.append(link);
   }
   new MutationObserver(() => { if (!queued) { queued = true; queueMicrotask(attach); } })

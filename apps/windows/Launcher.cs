@@ -7,7 +7,7 @@ using System.Reflection;
 #if !INSTALLER
 [assembly: AssemblyTitle("Re:tone")]
 [assembly: AssemblyProduct("Re:tone")]
-[assembly: AssemblyVersion("1.0.0.0")]
+[assembly: AssemblyVersion("1.1.0.0")]
 #endif
 internal static class Launcher {
     internal const string AppUrl = "https://retone-v2-mygr.onrender.com/?source=desktop";
@@ -25,13 +25,19 @@ internal static class Launcher {
     [STAThread] static int Main(string[] args) {
         string browser = FindBrowser();
         if (args.Length == 1 && args[0] == "/verify") return browser == null ? 2 : 0;
+        string appUrl = AppUrl;
+        if (args.Length > 0) {
+            string code = args.Length == 1 ? AppLinkPolicy.FriendCode(args[0]) : null;
+            if (code == null) { MessageBox.Show("올바른 Re:tone 초대 링크가 아닙니다.", "Re:tone"); return 3; }
+            appUrl += "&friend=" + Uri.EscapeDataString(code);
+        }
         if (browser == null) {
             MessageBox.Show("Re:tone을 실행하려면 Microsoft Edge 또는 Google Chrome을 설치해 주세요.", "Re:tone");
             return 2;
         }
         string profile = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Retone/Browser");
         try {
-            Process.Start(new ProcessStartInfo(browser, "--app=\"" + AppUrl + "\" --user-data-dir=\"" + profile + "\" --no-first-run --no-default-browser-check") { UseShellExecute = false });
+            Process.Start(new ProcessStartInfo(browser, "--app=\"" + appUrl + "\" --user-data-dir=\"" + profile + "\" --no-first-run --no-default-browser-check") { UseShellExecute = false });
             return 0;
         } catch (Exception e) {
             MessageBox.Show("앱을 실행할 수 없습니다.\n" + e.Message, "Re:tone"); return 1;
