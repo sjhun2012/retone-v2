@@ -458,10 +458,12 @@ function notifyUnreadRoom(room, previousUnread) {
   )
     return;
   const added = Math.max(1, room.unread - previousUnread);
-  new Notification(room.name || "Re:Tone", {
+  const options = {
     body: added === 1 ? "새 메시지가 왔어요." : `새 메시지 ${added}개가 왔어요.`,
     tag: `retone-${room.id}`,
-  });
+  };
+  if(window.retoneNotifications){void window.retoneNotifications.show(room.name||"Re:tone",options).catch(()=>{});return;}
+  try {new Notification(room.name||"Re:tone",options);}catch{}
 }
 function startInboxPolling(initialData = data) {
   stopInboxPolling();
@@ -659,16 +661,24 @@ function startRoomPolling(id) {
     try { await refreshRoom(id); } catch {} finally { busy = false; }
   }, 1800);
 }
-async function toggleBrowserNotifications() {
-  if (!("Notification" in window)) return alert("이 브라우저에서는 알림을 지원하지 않아요.");
-  const permission = await Notification.requestPermission();
-  localStorage.setItem("retone-browser-notifications", permission === "granted" ? "1" : "0");
-  settings();
+async function toggleBrowserNotifications(render = true) {
+  if (browserNotificationsEnabled()) localStorage.setItem("retone-browser-notifications","0");
+  else {
+    if (!("Notification" in window)) return alert("이 기기에서는 알림을 지원하지 않아요.");
+    const permission = await window.Notification.requestPermission();
+    localStorage.setItem("retone-browser-notifications",permission === "granted" ? "1" : "0");
+    if (permission !== "granted") alert("기기의 Re:tone 알림 권한을 허용해야 알림을 받을 수 있어요.");
+  }
+  window.retoneNotifications?.refresh();
+  if (render) settings();
 }
 function notifyNewMessage(message) {
   if (!browserNotificationsEnabled() || !("Notification" in window) || Notification.permission !== "granted" || isRoomMuted(roomId)) return;
   const room = data?.rooms?.find((item) => item.id === roomId);
-  new Notification(room?.name || "Re:Tone", { body: `${message.sender}: ${message.body || "사진을 보냈어요."}`, tag: `retone-${roomId}` });
+  const options={body:
+    `${message.sender}: ${message.body || "사진을 보냈어요."}`,tag:`retone-${roomId}`};
+  if(window.retoneNotifications){void window.retoneNotifications.show(room?.name||"Re:tone",options).catch(()=>{});return;}
+  try {new Notification(room?.name||"Re:tone",options);}catch{}
 }
 async function friends() {
   nav = "friends";
@@ -1374,14 +1384,7 @@ async function logout() {
   start();
 }
 function readImage(file) {
-  return new Promise((resolve, reject) => {
-    if (!file?.type.startsWith("image/") || file.size > 2_000_000)
-      return reject(new Error("사진 파일만 2MB 이하로 선택해주세요."));
-    const reader = new FileReader();
-    reader.onload = () => resolve(reader.result);
-    reader.onerror = reject;
-    reader.readAsDataURL(file);
-  });
+  return window.retonePrepareImage(file);
 }
 async function saveAvatar(dataUrl, overrideWarning = false) {
   const out = await api(`/api/users/${signedInId}/avatar`, {
@@ -2038,51 +2041,54 @@ async function send(event) {
     showCheckResult({ verdict: "PASS", source: "unavailable", info: { level: "none" } });
   }
 }
-async function sendImageNow(dataUrl) {
-  await api(`/api/rooms/${roomId}/messages`, {
+async function sendImageNow(dataUrl, context = {room:roomId, account:signedInId, reply:replyingTo?.id || null}) {
+  if (!context.room || signedInId !== context.account) throw new Error("로그인 상태가 바뀌었어요. 사진을 다시 선택해 주세요.");
+  const message = await api(`/api/rooms/${context.room}/messages`, {
     method: "POST",
-    body: JSON.stringify({
-      sender: signedIn,
-      sender_id: signedInId,
-      body: "사진을 보냈어요.",
-      image_url: dataUrl,
-      reply_to: replyingTo?.id || null,
-    }),
+    body: JSON.stringify({sender:signedIn,sender_id:context.account,body:"사진을 보냈어요.",image_url:dataUrl,reply_to:context.reply}),
   });
-  replyingTo = null;
-  openRoom(roomId);
+  if (roomId === context.room && signedInId === context.account) {
+    if ((replyingTo?.id || null) === context.reply) replyingTo = null;
+    if (typeof renderPendingReply === "function") renderPendingReply();
+    else { const slot=document.querySelector("#reply-slot");if(slot)slot.innerHTML=replyComposer(); }
+    await refreshRoom(context.room).catch(()=>{});
+  }
+  return message;
+}
+function photoSendError(error) {
+  const detail = error?.status === 413 ? "사진 용량이 너무 커요. 더 작은 사진으로 다시 시도해 주세요." : error?.status === 401 ? "다시 로그인한 뒤 사진을 보내주세요." : error?.status === 403 ? "이 채팅방에 사진을 보낼 권한이 없어요." : error?.status === 400 ? "지원되는 JPEG·PNG·WebP·GIF 사진을 선택해 주세요." : error?.message && !error.message.startsWith("Request failed:") ? error.message : "서버에 사진을 저장하지 못했어요. 잠시 후 다시 시도해 주세요.";
+  popup(`<div class="ai-check warn"><h2>사진을 전송하지 못했어요</h2><p>${esc(detail)}</p><button onclick="closePopup()">확인</button></div>`);
+}
+async function checkAndSendPhoto(dataUrl, context) {
+  if (signedInId !== context.account) return;
+  if (aiDetails()["이미지 안전 안내"] !== "끄기") {
+    let check;
+    try { check = await api("/api/images/check", {method:"POST",body:JSON.stringify({data_url:dataUrl})}); }
+    catch (error) {
+      if ([400,401,403,413].includes(error.status)) throw error;
+      popup('<div class="ai-check warn"><span>이미지 확인 연결 필요</span><h2>AI 이미지 확인을 마치지 못했어요</h2><p>이미지를 안전하다고 판정한 것은 아닙니다. 다시 확인하거나, 직접 확인한 사진을 보낼 수 있어요.</p><div class="modal-actions"><button class="quiet" onclick="closePopup()">취소</button><button id="photo-retry-check">다시 확인</button><button id="photo-send-unchecked">확인 없이 보내기</button></div></div>');
+      document.querySelector("#photo-retry-check").onclick=()=>{closePopup();checkAndSendPhoto(dataUrl,context).catch(photoSendError);};
+      document.querySelector("#photo-send-unchecked").onclick=()=>{closePopup();sendImageNow(dataUrl,context).catch(photoSendError);};
+      return;
+    }
+    if (check.flagged) {
+      popup('<div class="ai-check warn"><span>사진 전송 안내</span><h2>상대에게 불쾌감을 줄 수 있는 사진이에요</h2><p>이미지를 다시 확인하고 전송 여부를 선택해 주세요.</p><div class="modal-actions"><button class="quiet" onclick="closePopup()">다른 사진 고르기</button><button id="photo-send-confirmed">그래도 보내기</button></div></div>');
+      document.querySelector("#photo-send-confirmed").onclick=()=>{closePopup();sendImageNow(dataUrl,context).catch(photoSendError);};
+      return;
+    }
+  }
+  return sendImageNow(dataUrl,context);
 }
 async function sendImage(input) {
-  const file = input.files[0];
+  const file=input.files?.[0];
   if (!file || !roomId) return;
+  const context={room:roomId,account:signedInId,reply:replyingTo?.id || null};
   try {
-    setAiStatus("사진을 안전하게 확인 중이에요…", true);
-    const dataUrl = await readImage(file);
-    if (aiDetails()["이미지 안전 안내"] !== "끄기") {
-      const check = await api("/api/images/check", {
-        method: "POST",
-        body: JSON.stringify({ data_url: dataUrl }),
-      });
-      if (check.flagged) {
-        const legal = check.sexual
-          ? "선정적 이미지로 보일 수 있어 법률·플랫폼 규정 문제가 생길 수 있어요. Re:Tone은 법적 판단을 하지 않으며, 최종 선택과 책임은 사용자에게 있어요."
-          : "상대에게 불쾌감이나 유해한 이미지로 보일 수 있어요.";
-        const token = encodeURIComponent(dataUrl);
-        popup(
-          `<div class="ai-check warn"><span>사진 전송 안내</span><h2>이 사진은 이렇게 보일 수 있어요</h2><p>${legal}</p><div class="modal-actions"><button class="quiet" onclick="closePopup()">다른 사진 고르기</button><button onclick="closePopup();sendImageNow(decodeURIComponent('${token}'))">그래도 보내기</button></div></div>`,
-        );
-        return;
-      }
-    }
-    await sendImageNow(dataUrl);
-  } catch {
-    popup(
-      `<div class="ai-check warn"><h2>사진을 전송하지 못했어요</h2><p>2MB 이하의 이미지인지, AI 안전 점검 연결 상태를 확인해주세요.</p><button onclick="closePopup()">확인</button></div>`,
-    );
-  } finally {
-    setAiStatus("");
-    input.value = "";
-  }
+    setAiStatus("사진을 준비하고 확인하고 있어요…",true);
+    const dataUrl=await readImage(file);
+    await checkAndSendPhoto(dataUrl,context);
+  } catch (error) { photoSendError(error); }
+  finally { setAiStatus(""); input.value=""; }
 }
 function showCheckResult(result) {
   if (!result || (result.verdict !== "PASS" && result.verdict !== "WARN")) {

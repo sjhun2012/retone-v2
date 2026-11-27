@@ -18,3 +18,14 @@ self.addEventListener('fetch', event => {
     event.respondWith(fetch(event.request, {cache: 'no-store'}));
   }
 });
+self.addEventListener('notificationclick',event=>{
+  event.notification.close();
+  const id=Number(event.notification.data?.id);
+  if(!Number.isSafeInteger(id)||id<=0)return;
+  event.waitUntil(self.clients.matchAll({type:'window',includeUncontrolled:true}).then(async clients=>{
+    for(const client of clients){
+      if(new URL(client.url).origin===self.location.origin){client.postMessage({type:'retone-notification-click',id});return client.focus();}
+    }
+    return self.clients.openWindow('/?notice='+id);
+  }));
+});
