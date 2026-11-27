@@ -1,10 +1,12 @@
 mod room_sync;
 mod session;
 mod sources;
+mod media;
+mod notifications;
 use argon2::{Argon2, PasswordHash, PasswordHasher, PasswordVerifier};
 use axum::{
     Json, Router,
-    extract::{Path, Query, State},
+    extract::{Path, Query, State, DefaultBodyLimit},
     http::{HeaderMap, StatusCode},
     routing::{delete, get, patch, post},
 };
@@ -920,14 +922,18 @@ async fn request_friend(
     if already_connected {
         return Err(StatusCode::CONFLICT);
     }
-    sqlx::query(
+    let mut transaction=app.db.begin().await.map_err(|_|StatusCode::INTERNAL_SERVER_ERROR)?;
+    let inserted=sqlx::query(
         "INSERT INTO retone_v2.friend_requests(from_id,to_id) VALUES($1,$2) ON CONFLICT DO NOTHING",
     )
     .bind(user_id)
     .bind(input.target_id)
-    .execute(&app.db)
+    .execute(&mut *transaction)
     .await
-    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?.rows_affected();
+    if inserted==0{return Err(StatusCode::CONFLICT);}
+    notifications::insert(&mut transaction,input.target_id,user_id,"friend_request",None).await?;
+    transaction.commit().await.map_err(|_|StatusCode::INTERNAL_SERVER_ERROR)?;
     Ok(Json(serde_json::json!({"ok":true})))
 }
 async fn accept_friend(
@@ -954,6 +960,8 @@ async fn accept_friend(
     }
     sqlx::query("INSERT INTO retone_v2.friendships(user_id,friend_id) VALUES($1,$2),($2,$1) ON CONFLICT DO NOTHING")
         .bind(user_id).bind(input.target_id).execute(&mut *tx).await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    notifications::insert(&mut tx,input.target_id,user_id,"friend_accepted",None).await?;
+    sqlx::query("UPDATE retone_v2.user_notifications SET read_at=NOW() WHERE recipient_id=$1 AND actor_id=$2 AND kind='friend_request' AND read_at IS NULL").bind(user_id).bind(input.target_id).execute(&mut *tx).await.map_err(|_|StatusCode::INTERNAL_SERVER_ERROR)?;
     tx.commit()
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
@@ -2393,6 +2401,7 @@ async fn send(
     headers: HeaderMap,
     Json(input): Json<Send>,
 ) -> Result<Json<Message>, StatusCode> {
+    if input.body.len()>2*1024*1024{return Err(StatusCode::PAYLOAD_TOO_LARGE);}
     if input.body.trim().is_empty() && input.image_url.is_none() {
         return Err(StatusCode::BAD_REQUEST);
     }
@@ -2409,10 +2418,9 @@ async fn send(
     if !member {
         return Err(StatusCode::FORBIDDEN);
     }
-    let image_url = match input.image_url.as_deref() {
-        Some(data_url) => Some(upload_to_cloudinary(data_url, "retone/messages").await?),
-        None => None,
-    };
+    let prepared_image = input.image_url.as_deref().map(media::decode_image).transpose()?;
+    let message_id = Uuid::new_v4();
+    let image_url = prepared_image.as_ref().map(|_|format!("/api/rooms/{room_uuid}/messages/{message_id}/image"));
     let reply_to = match input.reply_to.as_deref() {
         Some(raw) => {
             let reply_id = Uuid::parse_str(raw).map_err(|_| StatusCode::BAD_REQUEST)?;
@@ -2447,7 +2455,7 @@ async fn send(
     let (alignment_hint, alignment_kind, alignment_summary) =
         alignment_cue(input.body.trim(), &recent_alignment_context);
     let mut message = Message {
-        id: Uuid::new_v4().to_string(),
+        id: message_id.to_string(),
         room_id: id.clone(),
         sender: sqlx::query_scalar(
             "SELECT name FROM retone_v2.users WHERE id=$1 AND deleted_at IS NULL",
@@ -2472,11 +2480,17 @@ async fn send(
         ai_suggestion: None,
         ai_trigger: None,
     };
+    let mut transaction = app.db.begin().await.map_err(|_|StatusCode::INTERNAL_SERVER_ERROR)?;
     sqlx::query("INSERT INTO retone_v2.messages(id,room_id,sender_id,body,intent,image_url,reply_to,alignment_hint,alignment_kind,alignment_summary) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)")
         .bind(Uuid::parse_str(&message.id).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?)
         .bind(room_uuid).bind(sender_id).bind(&message.body).bind(&message.intent).bind(&message.image_url).bind(reply_to)
         .bind(message.alignment_hint).bind(&message.alignment_kind).bind(&message.alignment_summary)
-        .execute(&app.db).await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        .execute(&mut *transaction).await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    if let Some(image) = prepared_image {
+        sqlx::query("INSERT INTO retone_v2.message_images(message_id,mime,payload) VALUES($1,$2,$3)")
+            .bind(message_id).bind(image.mime).bind(image.bytes).execute(&mut *transaction).await.map_err(|_|StatusCode::INTERNAL_SERVER_ERROR)?;
+    }
+    transaction.commit().await.map_err(|_|StatusCode::INTERNAL_SERVER_ERROR)?;
     let unread: i64 = sqlx::query_scalar(
         "SELECT COUNT(*)::BIGINT FROM retone_v2.room_members WHERE room_id=$1 AND user_id<>$2",
     )
@@ -2713,16 +2727,21 @@ async fn add_room_members(
             return Err(StatusCode::FORBIDDEN);
         }
     }
+    let mut transaction=app.db.begin().await.map_err(|_|StatusCode::INTERNAL_SERVER_ERROR)?;
+    let mut added=Vec::new();
     for invitee_id in invitees {
-        sqlx::query(
+        let inserted=sqlx::query(
             "INSERT INTO retone_v2.room_members(room_id,user_id) VALUES($1,$2) ON CONFLICT DO NOTHING",
         )
         .bind(room_id)
         .bind(invitee_id)
-        .execute(&app.db)
+        .execute(&mut *transaction)
         .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?.rows_affected();
+        if inserted>0 {added.push(invitee_id);}
     }
+    for invitee_id in added {notifications::insert(&mut transaction,invitee_id,inviter_id,"room_invite",Some(room_id)).await?;}
+    transaction.commit().await.map_err(|_|StatusCode::INTERNAL_SERVER_ERROR)?;
     let members: i64 =
         sqlx::query_scalar("SELECT COUNT(*) FROM retone_v2.room_members WHERE room_id=$1")
             .bind(room_id)
@@ -2766,7 +2785,9 @@ async fn create_room(
     if name.is_empty() {
         return Err(StatusCode::BAD_REQUEST);
     }
-    let invitees = input.invitee_ids.clone().unwrap_or_default();
+    let mut invitees = input.invitee_ids.clone().unwrap_or_default();
+    invitees.sort_unstable();
+    invitees.dedup();
     let is_direct = input.direct.unwrap_or(false);
     if is_direct && invitees.len() != 1 {
         return Err(StatusCode::BAD_REQUEST);
@@ -2824,26 +2845,28 @@ async fn create_room(
         }
     }
     let room_uuid = Uuid::parse_str(&room.id).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let mut transaction=app.db.begin().await.map_err(|_|StatusCode::INTERNAL_SERVER_ERROR)?;
     sqlx::query("INSERT INTO retone_v2.rooms(id,name,created_by,is_group) VALUES($1,$2,$3,$4)")
         .bind(room_uuid)
         .bind(&room.name)
         .bind(creator)
         .bind(!is_direct)
-        .execute(&app.db)
+        .execute(&mut *transaction)
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    let _ = sqlx::query(
+    sqlx::query(
         "INSERT INTO retone_v2.room_members(room_id,user_id) VALUES($1,$2) ON CONFLICT DO NOTHING",
     )
     .bind(room_uuid)
     .bind(creator)
-    .execute(&app.db)
-    .await;
-    for invitee in invitees {
-        if let Ok(user_id) = Uuid::parse_str(&invitee) {
-            let _ = sqlx::query("INSERT INTO retone_v2.room_members(room_id,user_id) VALUES($1,$2) ON CONFLICT DO NOTHING").bind(room_uuid).bind(user_id).execute(&app.db).await;
-        }
+    .execute(&mut *transaction)
+    .await.map_err(|_|StatusCode::INTERNAL_SERVER_ERROR)?;
+    for invitee in &invitees {
+        let user_id=Uuid::parse_str(invitee).map_err(|_|StatusCode::BAD_REQUEST)?;
+        sqlx::query("INSERT INTO retone_v2.room_members(room_id,user_id) VALUES($1,$2) ON CONFLICT DO NOTHING").bind(room_uuid).bind(user_id).execute(&mut *transaction).await.map_err(|_|StatusCode::INTERNAL_SERVER_ERROR)?;
     }
+    for invitee in &invitees {notifications::insert(&mut transaction,Uuid::parse_str(invitee).map_err(|_|StatusCode::BAD_REQUEST)?,creator,"room_invite",Some(room_uuid)).await?;}
+    transaction.commit().await.map_err(|_|StatusCode::INTERNAL_SERVER_ERROR)?;
     app.data.write().await.rooms.push(room.clone());
     Ok(Json(room))
 }
@@ -3302,6 +3325,7 @@ async fn prepare_storage() -> Option<PgPool> {
         return None;
     }
     ensure_friend_codes(&pool).await.ok()?;
+    sqlx::raw_sql(include_str!("../migrations/0002_images_notifications.sql")).execute(&pool).await.ok()?;
     Some(pool)
 }
 async fn restore_data(db: &PgPool) -> Data {
@@ -3375,7 +3399,7 @@ async fn main() {
             "/api/users/{id}/avatar",
             post(update_avatar).delete(delete_avatar),
         )
-        .route("/api/images/check", post(guarded_image_check))
+        .route("/api/images/check", post(guarded_image_check).layer(DefaultBodyLimit::max(12*1024*1024)))
         .route("/api/ai/check", post(guarded_ai_check))
         .route("/api/ai/status", get(ai_connection_status))
         .route("/api/ai/fact-check", post(sources::fact_check))
@@ -3406,7 +3430,11 @@ async fn main() {
         )
         .route("/api/reflections", post(create_reflection))
         .route("/api/reflections/{id}", delete(delete_reflection))
-        .route("/api/rooms/{id}/messages", get(messages).post(send))
+        .route("/api/rooms/{id}/messages", get(messages).post(send).layer(DefaultBodyLimit::max(12*1024*1024)))
+        .route("/api/rooms/{room}/messages/{message}/image",get(media::image))
+        .route("/api/notifications",get(notifications::list))
+        .route("/api/notifications/read",post(notifications::mark_read))
+        .route("/api/notifications/{id}",get(notifications::one))
         .route("/api/rooms/{id}/leave", delete(leave_room))
         .route("/api/rooms/{id}/insight", post(create_conversation_insight))
         .route(
