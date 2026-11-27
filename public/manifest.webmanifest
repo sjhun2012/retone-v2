@@ -1,0 +1,16 @@
+{
+  "id": "/",
+  "name": "Re:tone",
+  "short_name": "Re:tone",
+  "description": "대화의 다음을 더 좋게. Re:tone",
+  "lang": "ko",
+  "start_url": "/?source=pwa",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#f7f0e5",
+  "theme_color": "#f7f0e5",
+  "icons": [
+    {"src": "/icons/app-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any"},
+    {"src": "/icons/app-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any"}
+  ]
+}

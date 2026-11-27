@@ -1,0 +1,10 @@
+-keep class com.retone.app.** { *; }
+-dontobfuscate
+-dontoptimize
+-dontwarn androidx.annotation.**
+-dontwarn kotlin.**
+-dontwarn kotlinx.**
+-dontwarn androidx.lifecycle.**
+-dontwarn androidx.core.R$*
+-dontwarn androidx.concurrent.**
+-dontwarn com.google.common.util.concurrent.**
