@@ -1,0 +1,20 @@
+{
+  "app_name": "Re:tone",
+  "web_url": "https://retone-v2-mygr.onrender.com/",
+  "update_mode": "live-web; reopen or refresh after deployment",
+  "windows": {
+    "file": "InstallRetone.exe",
+    "bytes": 121344,
+    "sha256": "2ccdf246d4513bcd2d9524f2dc6b37268e14c630d870c392174d09f9ac2cd0f0",
+    "version": "1.0.0",
+    "signed": false
+  },
+  "android": {
+    "file": "InstallRetone.apk",
+    "bytes": 53804,
+    "sha256": "4aaa653ad3b22d1bfbe5488e9931e2d1438a4559ad0424bde38383d46e7eefc2",
+    "version": "1.0.0",
+    "package": "com.retone.app",
+    "certificate_sha256": "E9:77:CB:7F:0C:E1:B9:09:64:40:90:AB:8D:E4:84:A9:FC:63:90:44:4D:95:7C:45:16:0D:E4:61:6C:A4:31:92"
+  }
+}

@@ -1,0 +1,2 @@
+.retone-install-link{display:block;width:max-content;max-width:100%;margin:14px auto 0;color:inherit;font-size:12px;text-underline-offset:4px;opacity:.85}.rail .retone-install-link{margin:10px 0 0}.retone-install-link:hover{opacity:1}.retone-install-link:focus-visible{outline:2px solid #aebe3b;outline-offset:4px}
+@media(display-mode:standalone){body{padding-top:env(safe-area-inset-top)}.sendbar{padding-bottom:max(12px,env(safe-area-inset-bottom))}.head{padding-left:max(18px,env(safe-area-inset-left));padding-right:max(18px,env(safe-area-inset-right))}}

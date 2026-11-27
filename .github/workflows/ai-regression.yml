@@ -35,6 +35,12 @@ jobs:
           node-version: "22"
       - run: cargo test --locked
       - run: node --check public/app.js
+      - name: Check installable apps and download integrity
+        run: |
+          node --check public/app-install.js
+          node --check public/install-page.js
+          node --check public/sw.js
+          node --test tests/installable-apps.cjs
       - name: Check combined frontend behavior
         run: |
           npm install --no-audit --no-fund --prefix "$RUNNER_TEMP/retone-frontend" jsdom@22.1.0
@@ -55,3 +61,4 @@ jobs:
             cat "$RUNNER_TEMP/retone-server.log"
             exit 1
           fi
+

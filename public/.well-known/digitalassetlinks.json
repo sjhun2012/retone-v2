@@ -1,0 +1,14 @@
+[
+  {
+    "relation": [
+      "delegate_permission/common.handle_all_urls"
+    ],
+    "target": {
+      "namespace": "android_app",
+      "package_name": "com.retone.app",
+      "sha256_cert_fingerprints": [
+        "E9:77:CB:7F:0C:E1:B9:09:64:40:90:AB:8D:E4:84:A9:FC:63:90:44:4D:95:7C:45:16:0D:E4:61:6C:A4:31:92"
+      ]
+    }
+  }
+]

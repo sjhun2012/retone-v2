@@ -1,0 +1,23 @@
+name: Verify deployed ReTone apps
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'apps/**'
+      - 'public/**'
+      - 'tests/installed-apps-live.py'
+      - '.github/workflows/app-deployment.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  production:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Wait for Render and verify exact deployed packages
+        run: python tests/installed-apps-live.py --wait-seconds 900
