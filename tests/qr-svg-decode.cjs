@@ -11,7 +11,7 @@ module.exports=function decodeQrSvg(svg){
   let rectangles=0;
   for(const path of document.querySelectorAll('path[fill="#000"]')){
     const d=path.getAttribute('d');
-    for(const match of d.matchAll(/M(\d+) (\d+)h(\d+)v(\d+)(?:H\d+|h-\d+)z/g)){
+    for(const match of d.matchAll(/M(\d+) (\d+)h(\d+)v(\d+)(?:H\d+V\d+|(?:H\d+|h-\d+)z)/g)){
       const [left,top,w,h]=match.slice(1).map(Number);
       assert.ok(left+w<=width&&top+h<=height);
       for(let y=top;y<top+h;y++)for(let x=left;x<left+w;x++){
