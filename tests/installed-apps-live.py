@@ -29,11 +29,11 @@ def check():
         data, _ = get('/downloads/' + record['file'])
         assert len(data) == record['bytes'], 'Download length mismatch: ' + platform
         assert hashlib.sha256(data).hexdigest() == record['sha256'], 'Download digest mismatch: ' + platform
-    for path in ['/manifest.webmanifest','/.well-known/digitalassetlinks.json']:
+    for path in ['/manifest.webmanifest','/.well-known/assetlinks.json','/.well-known/digitalassetlinks.json']:
         data, headers = get(path)
         assert json.loads(data) == json.loads((ROOT/'public'/path.lstrip('/')).read_text(encoding='utf-8')), path
         if path.endswith('.json'): assert 'json' in headers.get('Content-Type','').lower(), 'Origin association must be JSON'
-    for path in ['/','/install.html','/sw.js','/app-install.js','/offline.html']:
+    for path in ['/','/install.html','/sw.js','/app-install.js','/offline.html','/friend.html','/friend-link.js','/friend-link.css']:
         relative = 'index.html' if path=='/' else path.lstrip('/')
         data, _ = get(path)
         assert data.decode('utf-8').strip() == (ROOT/'public'/relative).read_text(encoding='utf-8').strip(), 'Stale or unexpected resource: ' + path

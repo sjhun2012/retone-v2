@@ -373,6 +373,7 @@ struct PublicUser {
 #[derive(Serialize)]
 struct FriendIdentity {
     friend_code: String,
+    invite_url: String,
     qr_svg: String,
 }
 #[derive(Serialize)]
@@ -800,7 +801,8 @@ async fn friend_identity(
     // Old accounts may predate friend codes. Repair them on demand instead of
     // making the QR/code screen fail until the service restarts.
     let friend_code = get_or_create_friend_code(&app.db, user_id).await?;
-    let payload = format!("RETONE-FRIEND:{friend_code}");
+    let invite_url = format!("https://retone-v2-mygr.onrender.com/friend.html?code={friend_code}");
+    let payload = &invite_url;
     let qr_svg = QrCode::new(payload.as_bytes())
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
         .render::<svg::Color>()
@@ -808,6 +810,7 @@ async fn friend_identity(
         .build();
     Ok(Json(FriendIdentity {
         friend_code,
+        invite_url,
         qr_svg,
     }))
 }
@@ -3422,3 +3425,4 @@ async fn main() {
     println!("Re:Tone v2 on {port}");
     axum::serve(listener, router).await.unwrap();
 }
+

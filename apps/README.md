@@ -1,36 +1,42 @@
-# Re:tone installable apps
+# Re:tone apps 1.1
 
-These are established web-app packaging approaches: Windows uses an Edge/Chrome app window, Android uses a Trusted Web Activity (AndroidX Browser), and iOS uses a Safari home-screen web app. They run the existing production application at https://retone-v2-mygr.onrender.com/ and introduce no separate account system or backend. They require an internet connection.
+Windows runs the existing site in an Edge/Chrome app window; Android uses **Android System WebView**, with no Chrome-app or Custom Tabs dependency. iOS remains a Safari home-screen web app. These are established web-app packaging methods. All clients use the existing production backend and require internet access.
 
-Names: the application display name is **Re:tone**. Windows forbids `:` in file and shortcut names, so those use **Retone**. Downloads are `InstallRetone.exe` and `InstallRetone.apk`. iOS installation is via Safari > Share > Add to Home Screen; there is no IPA or App Store listing.
+Display name: **Re:tone**. Windows file/shortcut names use **Retone** because colons are forbidden. Downloads remain `InstallRetone.exe` and `InstallRetone.apk`.
 
-## Updates
+## Friend QR links
 
-Web features are the single source of truth. After a normal web deployment, reopening or refreshing an app loads the deployed version. A service worker uses network-only/no-store for navigations, JavaScript and CSS; it caches only the disconnected notice and leaves all API requests alone. It does not force reload during a call or while composing. Native binaries do not need rebuilding for web-only features and their bytes do not change when server code changes. Changes to the native launcher, icon, URL or packaging require a new build and reinstall/update. Use a higher Android versionCode for native releases.
+New QR codes encode `https://retone-v2-mygr.onrender.com/friend.html?code=ABC123`. An ordinary camera can recognize this HTTPS URL. Android 1.1 registers verified App Links for `/friend.html`, with the existing release certificate in `public/.well-known/assetlinks.json`. The OS opens the app when its verified-link preference allows it; otherwise the page continues to the web. No-app mobile visitors continue to `/?friend=ABC123`. iOS uses this web route; the installed Safari home-screen web app is not a native iOS universal-link handler.
 
-## Placeholder icon
+On desktop, `friend.html` offers an app-open prompt, a remember-choice checkbox, a persistent web fallback, and an install link. The Windows installer registers `retone://friend?code=ABC123` for the current user. Only a validated six-character friend code enters the app URL; arbitrary URLs or arguments are rejected. The checkbox remembers the site's choice. The browser controls its separate external-protocol permission prompt and may still ask. Neither JavaScript nor the installer bypasses that permission.
 
-Logo design was deferred at the user's request. `apps/shared/icon.png` is a generic operating-system application placeholder, shared by the Windows, Android and PWA packages. Replace that one PNG and run the build to update all package icons. Existing app icons may need reinstalling to refresh OS caches.
+After login, the friend code is looked up and the normal friend-request confirmation is shown. Opening an invite never automatically sends or accepts a friend request. Old `RETONE-FRIEND:ABC123` images remain readable by the in-app scanner but cannot be made into clickable camera links retroactively; share newly generated QR codes.
 
-## Build
+**Existing installations need one update to version 1.1** to gain Android verified links/WebView hosting and the Windows protocol registration. Keep the same Android package and signing key. WebView has its own cookie store, so users may need to sign in once after migrating from the old browser-based Android app. The server account and conversations remain the same.
 
-On Windows, install Python, .NET Framework 4.x, JDK 21, Android SDK platform 36 and build tools 36.0.0. Set `ANDROID_HOME` and `RETONE_JAVA_HOME` if their paths differ. Run:
+## WebView integration
+
+JavaScript and DOM storage are enabled for the production site. File-system access, mixed content, and untrusted main-frame navigation are blocked. External HTTPS citations open through the user's browser. Native file selection supports documents, photos and temporary camera capture URIs. Microphone/camera permissions are granted only for the exact trusted HTTPS origin, only for recognized resources, and only after Android permission approval. Authenticated attachment downloads pass the origin's cookies to DownloadManager.
+
+The existing web notification API is connected through a private WebMessagePort delivered to the trusted top-level origin with a per-document secret. No global JavaScript interface is exposed. Android notification permission is requested when the user enables notifications. This does not add server push or guaranteed delivery while the app is closed.
+
+## Updates and icon
+
+Web feature changes appear after deployment when an app reloads or reopens. The worker caches only the disconnected notice, fetches navigations/JavaScript/CSS with no-store, and leaves API traffic untouched. It never reloads an active conversation or draft automatically. Native code, URL handler, version or icon changes require rebuilding and updating the installer.
+
+Logo design is deferred. Replace `apps/shared/icon.png` and rebuild to apply the same artwork across packages. Existing installed icons may require an app update/reinstall to refresh OS icon caches.
+
+## Build and checks
+
+Requirements: Windows .NET Framework 4.x C# compiler, Python, JDK 21, Android SDK platform 36 and build tools 36.0.0. Set `ANDROID_HOME` and `RETONE_JAVA_HOME` for nondefault paths. There are no third-party Android runtime dependencies and no Gradle build is required.
 
 ```powershell
 python apps/build_apps.py
 node --test tests/installable-apps.cjs
 ```
 
-The script uses existing official Maven artifacts from the local Gradle cache when available, or downloads AndroidX Browser 1.4.0 and Core 1.13.1 from Google's Maven repository. No Gradle or API keys are needed. APKs are architecture-independent (no native libraries).
+The builder checks Windows link-policy rejection cases, embedded installer extraction and shortcut creation; Android origin/link policy cases; APK release signature, alignment, package, display label, versionCode and target SDK. It writes hashes to `public/downloads/checksums.json` and the release certificate to `/.well-known/assetlinks.json` (plus the historical `digitalassetlinks.json` alias).
 
-Builds are saved directly to `public/downloads/`. The build verifies Windows installer resource extraction byte-for-byte, browser discovery, APK signature, alignment, display name, application ID and target SDK. It writes the actual signing-certificate SHA-256 into `public/.well-known/digitalassetlinks.json`, which must be deployed on the production origin. Without this verification Android may show a browser toolbar. An installed up-to-date browser supporting TWA is required; unsupported devices fall back to their browser.
+Keep `.local/retone-release.jks` and `.local/android-signing.json` private and backed up. Never publish them. Losing the original key prevents updates of installed Android packages. Version 1.1 uses versionCode 2; increase it for future native releases. Windows installer remains unsigned. Google Play/App Store registration is not configured.
 
-The release keystore and password configuration are generated once under `.local/`. **Keep a private backup of both files**, outside Git. Never commit them or publish them with downloads. If they are lost, a replacement key cannot update the existing installed Android application. Builds refuse to generate over an existing key with missing configuration. Publish only the public certificate fingerprint, never the key/password.
-
-Windows installer is currently unsigned and may show an unknown-publisher prompt. Android is signed with the project release key for direct installation; Google Play publication is a separate step. No store accounts or paid signing service have been configured.
-
-## Checks and deployment
-
-`tests/installable-apps.cjs` executes the service worker in an isolated harness to verify fresh navigation/assets, offline fallback and API exclusion. It checks installer download hashes and APK certificate association. Existing frontend checks continue to run because the chat code is unchanged. CI checks source and downloaded-package integrity. Native installation and camera/microphone/notification behavior still need physical Windows/Android/iOS device checks; do not claim emulator or device coverage from package checks alone.
-
-Merge the tested change into `main`, follow the existing Render auto-deploy, then check `/api/health`, `/install.html`, `/manifest.webmanifest`, `/.well-known/digitalassetlinks.json`, and both downloads. Deploying these static additions does not migrate or change accounts or chat data.
+CI runs the existing server/frontend checks, invite/prompt/download-button and notification-port tests, native origin-policy tests, and a real jsQR decode of the server's generated SVG using a local test account/database. The post-deploy workflow checks live static files, canonical asset links, API health and exact installer hashes. Package tests are not physical-device, camera, microphone, or OS link-dispatch tests; do not claim device coverage without actually running it.

@@ -9,7 +9,7 @@ using Microsoft.Win32;
 
 [assembly: AssemblyTitle("Re:tone 설치")]
 [assembly: AssemblyProduct("Re:tone")]
-[assembly: AssemblyVersion("1.0.0.0")]
+[assembly: AssemblyVersion("1.1.0.0")]
 internal static class Installer {
     static readonly string InstallDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Programs/Retone");
     static readonly string[] Payloads = {"Retone.exe", "app.ico", "Uninstall.ps1", "README.txt"};
@@ -40,8 +40,15 @@ internal static class Installer {
         File.WriteAllText(Path.Combine(InstallDir, ".retone-install"), "retone-v2:1");
         Shortcut(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory), "Retone.lnk"));
         Shortcut(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Programs), "Retone.lnk"));
+        using (RegistryKey protocol = Registry.CurrentUser.CreateSubKey(@"Software\Classes\retone")) {
+            protocol.SetValue("", "URL:Re:tone"); protocol.SetValue("URL Protocol", "");
+            protocol.SetValue("RetoneOwner", InstallDir);
+            using (RegistryKey icon = protocol.CreateSubKey("DefaultIcon")) icon.SetValue("", Path.Combine(InstallDir, "app.ico"));
+            using (RegistryKey command = protocol.CreateSubKey(@"shell\open\command"))
+                command.SetValue("", "\"" + Path.Combine(InstallDir, "Retone.exe") + "\" \"%1\"");
+        }
         using (RegistryKey key = Registry.CurrentUser.CreateSubKey(@"Software\Microsoft\Windows\CurrentVersion\Uninstall\Retone")) {
-            key.SetValue("DisplayName", "Re:tone"); key.SetValue("DisplayVersion", "1.0.0");
+            key.SetValue("DisplayName", "Re:tone"); key.SetValue("DisplayVersion", "1.1.0");
             key.SetValue("Publisher", "Re:tone"); key.SetValue("InstallLocation", InstallDir);
             key.SetValue("DisplayIcon", Path.Combine(InstallDir, "app.ico"));
             key.SetValue("UninstallString", "powershell.exe -NoProfile -ExecutionPolicy Bypass -File \"" + Path.Combine(InstallDir, "Uninstall.ps1") + "\"");

@@ -35,16 +35,27 @@ jobs:
           node-version: "22"
       - run: cargo test --locked
       - run: node --check public/app.js
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - name: Check Android trusted-origin and invite policies
+        run: |
+          javac -d "$RUNNER_TEMP/retone-policy" apps/android/AppPolicy.java tests/AndroidPolicyTests.java
+          java -cp "$RUNNER_TEMP/retone-policy" com.retone.app.AndroidPolicyTests
       - name: Check installable apps and download integrity
         run: |
           node --check public/app-install.js
           node --check public/install-page.js
           node --check public/sw.js
+          node --check public/friend-link.js
+          node --check apps/android/assets/native-notifications.js
           node --test tests/installable-apps.cjs
       - name: Check combined frontend behavior
         run: |
-          npm install --no-audit --no-fund --prefix "$RUNNER_TEMP/retone-frontend" jsdom@22.1.0
+          npm install --no-audit --no-fund --prefix "$RUNNER_TEMP/retone-frontend" jsdom@22.1.0 jsqr@1.4.0
           NODE_PATH="$RUNNER_TEMP/retone-frontend/node_modules" node tests/frontend-regressions.cjs
+          NODE_PATH="$RUNNER_TEMP/retone-frontend/node_modules" node tests/invite-flows.cjs
       - name: Check server against existing database schema
         run: |
           git show 251243e00effd021db33bc403b0ca14702dd52c5:migrations/0001_retone_v2.sql > "$RUNNER_TEMP/previous-schema.sql"
@@ -57,8 +68,9 @@ jobs:
             if curl --silent --fail http://127.0.0.1:4000/api/health > /dev/null; then break; fi
             sleep 1
           done
-          if ! node tests/deployment-smoke.cjs; then
+          if ! NODE_PATH="$RUNNER_TEMP/retone-frontend/node_modules" node tests/deployment-smoke.cjs; then
             cat "$RUNNER_TEMP/retone-server.log"
             exit 1
           fi
+
 

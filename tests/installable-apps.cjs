@@ -81,7 +81,7 @@ test('downloaded installers match their recorded hashes and Android origin bindi
   assert.equal(exe.toString('ascii',exe.readUInt32LE(0x3c),exe.readUInt32LE(0x3c)+4),'PE\0\0');
   const apk=fs.readFileSync(path.join(root,'public/downloads/InstallRetone.apk'));
   assert.equal(apk.toString('hex',0,4),'504b0304');
-  const links=JSON.parse(read('public/.well-known/digitalassetlinks.json'));
+  const links=JSON.parse(read('public/.well-known/assetlinks.json'));
   assert.equal(links[0].target.package_name,checksums.android.package);
   assert.deepEqual(links[0].target.sha256_cert_fingerprints,[checksums.android.certificate_sha256]);
   assert.match(checksums.android.certificate_sha256,/^(?:[0-9A-F]{2}:){31}[0-9A-F]{2}$/);

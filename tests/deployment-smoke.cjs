@@ -27,6 +27,10 @@ async function main() {
     return {...out.value.user,cookie:out.cookie};
   }));
   assert.equal((await request('/api/auth/me',{session:alice})).value.id,alice.id);
+  const identity=(await request('/api/friends/me',{session:alice})).value;
+  assert.match(identity.friend_code,/^[A-Z0-9]{6}$/);
+  assert.equal(identity.invite_url,'https://retone-v2-mygr.onrender.com/friend.html?code='+identity.friend_code);
+  assert.equal(require('./qr-svg-decode.cjs')(identity.qr_svg),identity.invite_url);
   await request('/api/bootstrap',{expected:401});
   await request('/api/friends/request',{session:alice,method:'POST',body:{target_id:bob.id}});
   await request('/api/friends/accept',{session:bob,method:'POST',body:{target_id:alice.id}});
@@ -49,6 +53,7 @@ async function main() {
   await request('/api/auth/logout',{session:alice,method:'POST',expected:204});
   await request('/api/auth/me',{session:alice,expected:401});
   assert.ok((await request('/api/auth/login',{method:'POST',body:credentials[0]})).cookie);
-  console.log('Deployment smoke passed: migration, auth, friendship, chat, typing, schedule approval, logout and login.');
+  console.log('Deployment smoke passed: migration, auth, real QR URL decoding, friendship, chat, typing, schedule approval, logout and login.');
 }
 main().catch(error=>{console.error(error);process.exitCode=1});
+
