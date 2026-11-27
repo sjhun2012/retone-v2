@@ -25,7 +25,8 @@ async function optimizer(){
 function frontend(){
   const dom=new JSDOM('<main id="app"></main>',{url:'https://retone.test/'});
   const context=vm.createContext({window:dom.window,document:dom.window.document,sessionStorage:dom.window.sessionStorage,localStorage:dom.window.localStorage,setTimeout,clearTimeout,setInterval,clearInterval,crypto,fetch:async()=>{throw Error('Unexpected network')},Notification:function(){},FileReader:function(){},alert(){},confirm(){return true},console,URL,URLSearchParams,FormData:dom.window.FormData});
-  vm.runInContext(read('public/app.js').replace(/\nrestoreLogin\(\);\s*$/,'\n'),context);
+  // Inject the photo preference dependency without starting login/network polling.
+  vm.runInContext(read('public/app.js').replace(/\nrestoreLogin\(\);\s*$/,'\n').replace('const aiDetails =','let aiDetails ='),context);
   return{dom,context};
 }
 async function photos(){
