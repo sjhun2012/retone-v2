@@ -13,7 +13,7 @@ const ORIGIN:&str="https://retone-v2-mygr.onrender.com";
 static SENDER:OnceLock<Sender>=OnceLock::new();
 static SIGNAL:tokio::sync::Notify=tokio::sync::Notify::const_new();
 pub fn wake(){SIGNAL.notify_one();}
-struct Sender{key:RsaKeyPair,email:String,client:reqwest::Client,access:Mutex<Option<(String,u64)>>}
+struct Sender{key:RsaKeyPair,email:String,client:reqwest::Client,access:Mutex<Option<(String,u64)>>,oauth_url:String,fcm_url:String}
 #[derive(Deserialize)]
 struct Credential{project_id:String,client_email:String,private_key:String,#[serde(rename="type")]kind:String}
 #[derive(Deserialize)]
@@ -93,7 +93,7 @@ impl Sender{
         let mut cached=self.access.lock().await;let timestamp=now();
         if let Some((token,expires))=&*cached{if *expires>timestamp+60{return Ok(token.clone());}}
         let assertion=self.assertion(timestamp)?;
-        let response=self.client.post("https://oauth2.googleapis.com/token").header("Content-Type","application/x-www-form-urlencoded")
+        let response=self.client.post(&self.oauth_url).header("Content-Type","application/x-www-form-urlencoded")
             .body(format!("grant_type=urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Ajwt-bearer&assertion={assertion}")).send().await.map_err(|_|())?;
         if !response.status().is_success(){return Err(());}
         let value:serde_json::Value=response.json().await.map_err(|_|())?;
@@ -107,7 +107,7 @@ impl Sender{
         let mut message=serde_json::json!({"token":token,"data":data});
         if platform=="android"{message["android"]=serde_json::json!({"priority":"HIGH","ttl":"86400s"});}
         else{message["webpush"]=serde_json::json!({"headers":{"TTL":"86400","Urgency":"high"},"fcm_options":{"link":format!("{ORIGIN}/?notice={id}")}});}
-        let response=match self.client.post(format!("https://fcm.googleapis.com/v1/projects/{PROJECT}/messages:send")).bearer_auth(access).json(&serde_json::json!({"message":message})).send().await{Ok(value)=>value,Err(_)=>return Delivery::Retry(30)};
+        let response=match self.client.post(&self.fcm_url).bearer_auth(access).json(&serde_json::json!({"message":message})).send().await{Ok(value)=>value,Err(_)=>return Delivery::Retry(30)};
         let status=response.status();if status.is_success(){return Delivery::Sent;}
         let retry=response.headers().get("retry-after").and_then(|h|h.to_str().ok()).and_then(|h|h.parse::<u64>().ok()).unwrap_or(60).clamp(5,3600);
         if status.as_u16()==401{*self.access.lock().await=None;return Delivery::Retry(retry);}
@@ -122,7 +122,17 @@ enum Delivery{Sent,Invalid,Retry(u64),Failed}
 pub fn start(db:PgPool){
     let Ok(raw)=std::env::var("RETONE_FCM_SERVICE_ACCOUNT_JSON") else{return;};
     let (credentials,key)=match credential(&raw){Ok(value)=>value,Err(reason)=>{eprintln!("FCM disabled: {reason}");return;}};
-    let sender=Sender{key,email:credentials.client_email,client:reqwest::Client::builder().timeout(Duration::from_secs(15)).build().expect("FCM HTTP client"),access:Mutex::new(None)};
+    #[allow(unused_mut)]
+    let mut endpoints=("https://oauth2.googleapis.com/token".to_string(),format!("https://fcm.googleapis.com/v1/projects/{PROJECT}/messages:send"));
+    // Only debug builds used in isolated CI can contact the local mock. Release
+    // builds do not read this variable and always use Google's fixed endpoints.
+    #[cfg(debug_assertions)]
+    if let Ok(origin)=std::env::var("RETONE_FCM_TEST_ORIGIN"){
+        let parsed=reqwest::Url::parse(&origin).expect("local FCM test origin");
+        assert!(parsed.scheme()=="http"&&parsed.host_str()==Some("127.0.0.1")&&parsed.port().is_some()&&parsed.path()=="/"&&parsed.query().is_none()&&parsed.username().is_empty()&&parsed.password().is_none());
+        let base=origin.trim_end_matches('/');endpoints=(format!("{base}/token"),format!("{base}/messages"));
+    }
+    let sender=Sender{key,email:credentials.client_email,client:reqwest::Client::builder().timeout(Duration::from_secs(15)).build().expect("FCM HTTP client"),access:Mutex::new(None),oauth_url:endpoints.0,fcm_url:endpoints.1};
     if SENDER.set(sender).is_err(){return;}
     tokio::spawn(async move{
         let mut cleaned=0;
@@ -174,7 +184,7 @@ async fn dispatch_one(db:&PgPool)->Result<bool,sqlx::Error>{
         assert!(generated.status.success());
         let value=serde_json::json!({"type":"service_account","project_id":PROJECT,"client_email":format!("test@{PROJECT}.iam.gserviceaccount.com"),"private_key":String::from_utf8(generated.stdout).unwrap()});
         let (config,key)=credential(&value.to_string()).unwrap();
-        let sender=Sender{key,email:config.client_email,client:reqwest::Client::new(),access:Mutex::new(None)};
+        let sender=Sender{key,email:config.client_email,client:reqwest::Client::new(),access:Mutex::new(None),oauth_url:String::new(),fcm_url:String::new()};
         let jwt=sender.assertion(10000).unwrap();let parts:Vec<_>=jwt.split('.').collect();assert_eq!(parts.len(),3);
         let claims:serde_json::Value=serde_json::from_slice(&URL_SAFE_NO_PAD.decode(parts[1]).unwrap()).unwrap();
         assert_eq!(claims["exp"],13600);assert_eq!(claims["aud"],"https://oauth2.googleapis.com/token");assert_eq!(claims["scope"],"https://www.googleapis.com/auth/firebase.messaging");

@@ -79,5 +79,7 @@ jobs:
             cat "$RUNNER_TEMP/retone-server.log"
             exit 1
           fi
+      - name: Check actual FCM worker against local OAuth and delivery mocks
+        run: node tests/push-delivery.cjs
 
 
