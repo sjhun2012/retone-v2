@@ -37,6 +37,7 @@ async function main() {
   await request('/api/friends/accept',{session:bob,method:'POST',body:{target_id:alice.id}});
   const room=(await request('/api/rooms',{session:alice,method:'POST',
     body:{name:'Combined deployment smoke',direct:true,invitee_ids:[bob.id]}})).value;
+  await require('./room-notifications-api.cjs')({request,alice,bob,room});
   await require('./media-events-api.cjs')({base,request,alice,bob,room});
   const message=(await request('/api/rooms/'+room.id+'/messages',{session:alice,method:'POST',
     body:{body:'Hello from the combined release'}})).value;

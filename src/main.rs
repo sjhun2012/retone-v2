@@ -1,4 +1,5 @@
 mod room_sync;
+mod room_notifications;
 mod session;
 mod sources;
 mod media;
@@ -2157,8 +2158,12 @@ async fn bootstrap(
         }
         rooms.sort_by(|left, right| right.updated.cmp(&left.updated));
     }
+    let muted_rooms = sqlx::query_scalar::<_,Uuid>("SELECT room_id FROM retone_v2.room_members WHERE user_id=$1 AND notifications_muted")
+        .bind(user_id).fetch_all(&app.db).await.map_err(|_|StatusCode::INTERNAL_SERVER_ERROR)?
+        .into_iter().map(|id|id.to_string()).collect();
     Ok(Json(DataOut {
         rooms,
+        muted_rooms,
         agreements: d
             .agreements
             .iter()
@@ -2190,6 +2195,7 @@ async fn bootstrap(
 #[derive(Serialize)]
 struct DataOut {
     rooms: Vec<Room>,
+    muted_rooms: Vec<String>,
     agreements: Vec<Agreement>,
     appointments: Vec<Appointment>,
     reflections: Vec<Reflection>,
@@ -3333,6 +3339,7 @@ async fn prepare_storage() -> Option<PgPool> {
     ensure_friend_codes(&pool).await.ok()?;
     sqlx::raw_sql(include_str!("../migrations/0002_images_notifications.sql")).execute(&pool).await.ok()?;
     sqlx::raw_sql(include_str!("../migrations/0003_push.sql")).execute(&pool).await.ok()?;
+    sqlx::raw_sql(include_str!("../migrations/0004_room_notifications.sql")).execute(&pool).await.ok()?;
     Some(pool)
 }
 async fn restore_data(db: &PgPool) -> Data {
@@ -3391,6 +3398,7 @@ async fn main() {
         .route("/api/auth/logout", post(session::logout))
         .route("/api/rooms/{id}/sync", get(room_sync::sync))
         .route("/api/rooms/{id}/typing", post(room_sync::typing))
+        .route("/api/rooms/{id}/notifications", get(room_notifications::get_preference).patch(room_notifications::set_preference))
         .route("/api/auth/admin-login", post(admin_login))
         .route("/api/users", get(users))
         .route("/api/friends", get(friends))

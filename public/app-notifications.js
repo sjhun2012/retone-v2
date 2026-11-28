@@ -31,7 +31,7 @@
         cached.set(event.id,event);
         const saved=Number(localStorage.getItem(key(user))||0);
         if(event.id<=saved)continue;
-        if(!event.read&&!window.retonePush?.active(user))await show(event.title,{body:event.body,tag:'retone-event-'+event.id,icon:'/icons/app-192.png',data:{id:event.id,url:'/?notice='+event.id}});
+        if(!event.read&&!event.muted&&!window.retonePush?.active(user))await show(event.title,{body:event.body,tag:'retone-event-'+event.id,icon:'/icons/app-192.png',data:{id:event.id,url:'/?notice='+event.id}});
         if(user!==current()||expected!==generation)return;
         localStorage.setItem(key(user),String(event.id));
       }

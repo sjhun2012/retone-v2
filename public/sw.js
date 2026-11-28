@@ -38,7 +38,7 @@ self.retoneHandlePush=async payload=>{
   try{
     const response=await fetch('/api/notifications/'+id,{credentials:'same-origin',cache:'no-store',headers:{'X-ReTone-User':user},signal:AbortSignal.timeout(10000)});
     if(!response.ok)return;
-    const notice=await response.json();if(notice.read||notice.id!==id)return;
+    const notice=await response.json();if(notice.read||notice.muted||notice.id!==id)return;
     await self.registration.showNotification(notice.title,{body:notice.body,tag:'retone-event-'+id,icon:'/icons/app-192.png',data:{id,url:'/?notice='+id}});
   }catch{}
 };
