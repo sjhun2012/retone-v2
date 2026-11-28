@@ -30,3 +30,32 @@ jobs:
           name: Retone-Android-unsigned
           path: apps/android-gradle/app/build/outputs/apk/release/app-release-unsigned.apk
           retention-days: 7
+  publish-build:
+    needs: android
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: Retone-Android-unsigned
+          path: unsigned
+      - name: Make the checked unsigned build available through repository blobs
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 - <<'PY'
+          import base64,hashlib,json,os,pathlib,urllib.request
+          apk=pathlib.Path('unsigned/app-release-unsigned.apk').read_bytes()
+          endpoint='https://api.github.com/repos/'+os.environ['GITHUB_REPOSITORY']+'/git/blobs'
+          def blob(data):
+              request=urllib.request.Request(endpoint,json.dumps({'encoding':'base64','content':base64.b64encode(data).decode('ascii')}).encode(),headers={'Authorization':'Bearer '+os.environ['GH_TOKEN'],'Content-Type':'application/json','Accept':'application/vnd.github+json'},method='POST')
+              with urllib.request.urlopen(request,timeout=30) as response:return json.load(response)['sha']
+          chunks=[]
+          for offset in range(0,len(apk),65536):
+              part=apk[offset:offset+65536]
+              chunks.append({'sha':blob(part),'bytes':len(part),'sha256':hashlib.sha256(part).hexdigest()})
+          manifest={'commit':os.environ['GITHUB_SHA'],'file_name':'app-release-unsigned.apk','bytes':len(apk),'sha256':hashlib.sha256(apk).hexdigest(),'chunks':chunks}
+          manifest_sha=blob((json.dumps(manifest)+'\n').encode())
+          print('RETONE_UNSIGNED_MANIFEST_SHA='+manifest_sha,flush=True)
+          PY
