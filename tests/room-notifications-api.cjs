@@ -12,7 +12,7 @@ module.exports=async({request,alice,bob,room})=>{
   assert.ok((await request('/api/bootstrap',{session:alice})).value.muted_rooms.includes(room.id));
   assert.equal((await request('/api/rooms/'+room.id+'/sync',{session:alice})).value.notifications_muted,true);
   assert.equal((await request(endpoint,{session:bob})).value.notifications_muted,false);
-  const login=await request('/api/auth/login',{method:'POST',body:{phone:alice.phone||'01099990001',password:'Testpass1!'}});
+  const login=await request('/api/auth/login',{method:'POST',body:{name:alice.name,phone:alice.phone||'01099990001',password:'Testpass1!'}});
   assert.equal((await request(endpoint,{session:{cookie:login.cookie}})).value.notifications_muted,true,'another device/session must see the saved preference');
   const invite=(await request('/api/notifications?since=0',{session:bob})).value.notifications.find(n=>n.room_id===room.id);
   await request(endpoint,{session:bob,method:'PATCH',body:{notifications_muted:true}});
