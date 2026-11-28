@@ -31,6 +31,8 @@ python apps/build_apps.py --only android --unsigned PATH_TO_UNSIGNED_APK
 
 The signer verifies the old certificate fingerprint, APK identity, Firebase configuration and package integrity before updating `public/downloads/InstallRetone.apk` and its checksum manifest. Keep `.local/retone-release.jks` and `.local/android-signing.json` private and backed up.
 
+For the prepared 1.2.0 CI build already restored under `build/`, Windows users without the SDK can run `apps/FinishAndroidPush.cmd` from their normal command prompt. The helper checks the exact unsigned build hash, obtains Build Tools 36.0.0 from Google's HTTPS SDK repository, checks its advertised archive size and checksum, then invokes the same local signer. Tools stay in `.local/android-sdk`; existing system tools and signing keys are preserved. It does not upload credentials or the package. This helper requires a network-enabled local terminal; the agent sandbox may block the download.
+
 ## Verification
 
 Automated checks cover RSA signatures/OAuth claims, authenticated device enrollment, account rebinding, cross-account revocation attempts, transactionally queued jobs, logout cascades, stale frontend responses, opt-out, failed enrollment fallback, service-worker recipient checks, Android compilation and the installed package hashes. Actual notification delivery on a closed physical app still requires a configured sending credential, an enrolled device with permission and a device test; a successful build alone does not establish that delivery worked.
