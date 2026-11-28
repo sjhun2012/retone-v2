@@ -24,6 +24,10 @@ def check():
     assert json.loads(actual) == expected, 'Render is still serving a different release'
     health, _ = get('/api/health')
     assert json.loads(health).get('version'), 'Health response is missing the application version'
+    push, _ = get('/api/push/config')
+    configuration=json.loads(push)
+    assert configuration.get('enabled') is True, 'Firebase server delivery is not configured'
+    assert len(configuration.get('vapid_key','')) == 87, 'Web push public key is not configured'
     for platform in ['windows','android']:
         record=expected[platform]
         data, _ = get('/downloads/' + record['file'])
@@ -33,7 +37,7 @@ def check():
         data, headers = get(path)
         assert json.loads(data) == json.loads((ROOT/'public'/path.lstrip('/')).read_text(encoding='utf-8')), path
         if path.endswith('.json'): assert 'json' in headers.get('Content-Type','').lower(), 'Origin association must be JSON'
-    for path in ['/','/install.html','/sw.js','/app-install.js','/offline.html','/friend.html','/friend-link.js','/friend-link.css','/photo-upload.js','/app-notifications.js','/app-notifications.css']:
+    for path in ['/','/install.html','/sw.js','/app-install.js','/offline.html','/friend.html','/friend-link.js','/friend-link.css','/photo-upload.js','/app-notifications.js','/app-notifications.css','/app.js','/app-push.js','/firebase-config.js','/firebase-client.json']:
         relative = 'index.html' if path=='/' else path.lstrip('/')
         data, _ = get(path)
         assert data.decode('utf-8').strip() == (ROOT/'public'/relative).read_text(encoding='utf-8').strip(), 'Stale or unexpected resource: ' + path

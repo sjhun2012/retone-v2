@@ -54,7 +54,7 @@ jobs:
           chunks=[]
           for offset in range(0,len(apk),65536):
               part=apk[offset:offset+65536]
-              chunks.append({'sha':blob(part),'bytes':len(part),'sha256':hashlib.sha256(part).hexdigest()})
+              chunks.append({'sha':blob(base64.b64encode(part)),'encoding':'base64','bytes':len(part),'sha256':hashlib.sha256(part).hexdigest()})
           manifest={'commit':os.environ['GITHUB_SHA'],'file_name':'app-release-unsigned.apk','bytes':len(apk),'sha256':hashlib.sha256(apk).hexdigest(),'chunks':chunks}
           manifest_sha=blob((json.dumps(manifest)+'\n').encode())
           print('RETONE_UNSIGNED_MANIFEST_SHA='+manifest_sha,flush=True)
