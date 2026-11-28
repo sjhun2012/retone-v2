@@ -9,9 +9,12 @@ exports.prepare=async({request,alice,bob})=>{
   await request('/api/push/devices',{session:alice,method:'POST',body:{installation_id:a,platform:'android',token:'bad'},expected:400});
   const enrolled=(await register(alice,a,'a'.repeat(60))).value;assert.equal(enrolled.registered,true);assert.equal(enrolled.user_id,alice.id);assert.ok(!JSON.stringify(enrolled).includes('a'.repeat(60)));
   await register(bob,b,'b'.repeat(60));
+  await request('/api/push/devices/'+a+'/token',{session:bob,method:'POST',body:{token:'r'.repeat(60)},expected:409});
+  await request('/api/push/devices/'+a+'/token',{session:alice,method:'POST',body:{token:'s'.repeat(60)},expected:204});
   await request('/api/push/devices/'+a,{session:bob,method:'DELETE',expected:204});
   assert.equal((await request('/api/push/status',{session:alice})).value.registered_devices,1);
   await register(bob,a,'c'.repeat(60));assert.equal((await request('/api/push/status',{session:alice})).value.registered_devices,0);
+  await request('/api/push/devices/'+a+'/token',{session:alice,method:'POST',body:{token:'t'.repeat(60)},expected:409});
   await register(alice,a,'d'.repeat(60));assert.equal((await request('/api/push/status',{session:bob})).value.registered_devices,1);
   return{a,b};
 };

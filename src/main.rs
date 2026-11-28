@@ -3445,6 +3445,7 @@ async fn main() {
         .route("/api/push/status",get(push::status))
         .route("/api/push/devices",post(push::register))
         .route("/api/push/devices/{id}",delete(push::remove))
+        .route("/api/push/devices/{id}/token",post(push::refresh))
         .route("/api/notifications/read",post(notifications::mark_read))
         .route("/api/notifications/{id}",get(notifications::one))
         .route("/api/rooms/{id}/leave", delete(leave_room))

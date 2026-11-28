@@ -13,6 +13,7 @@ import secrets
 import shutil
 import subprocess
 import urllib.request
+import urllib.parse
 import zipfile
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -108,6 +109,34 @@ def gradle_unsigned(java_home, sdk):
     return ROOT/'apps/android-gradle/app/build/outputs/apk/release/app-release-unsigned.apk'
 
 
+def ci_unsigned():
+    # This receipt is prepared from the authenticated GitHub artifact response.
+    # It contains only a short-lived artifact URL, never a signing key.
+    receipt=json.loads((LOCAL/'android-release.json').read_text(encoding='utf-8'))
+    import re
+    url=urllib.parse.urlparse(receipt['download_url'])
+    if url.scheme!='https' or not (url.hostname or '').endswith('.oaiusercontent.com'):
+        raise RuntimeError('Unexpected CI artifact host')
+    if not re.fullmatch('[0-9a-f]{64}',receipt.get('sha256','')) or not re.fullmatch('[0-9a-f]{40}',receipt.get('commit','')):
+        raise RuntimeError('The CI artifact receipt is incomplete')
+    destination=LOCAL/'android-ci'; destination.mkdir(parents=True,exist_ok=True)
+    archive=destination/'unsigned.zip'
+    try:
+        with urllib.request.urlopen(receipt['download_url'],timeout=30) as response:
+            data=response.read(16*1024*1024+1)
+    except Exception:
+        raise RuntimeError('Could not download the checked CI artifact. Ask for a refreshed download receipt if the link has expired.') from None
+    if len(data)>16*1024*1024 or hashlib.sha256(data).hexdigest()!=receipt['sha256']:
+        raise RuntimeError('CI artifact checksum mismatch')
+    archive.write_bytes(data)
+    with zipfile.ZipFile(archive) as package:
+        apks=[entry for entry in package.infolist() if Path(entry.filename).name=='app-release-unsigned.apk']
+        if len(apks)!=1 or apks[0].file_size>32*1024*1024:
+            raise RuntimeError('The checked artifact does not contain one expected APK')
+        target=destination/'app-release-unsigned.apk';target.write_bytes(package.read(apks[0]))
+    return target
+
+
 def android(unsigned_input=None):
     sdk = Path(os.environ.get('ANDROID_HOME') or os.environ.get('ANDROID_SDK_ROOT') or str(Path(os.environ['LOCALAPPDATA'])/'Android/Sdk'))
     java_home = Path(os.environ.get('RETONE_JAVA_HOME', 'C:/Program Files/Java/jdk-21'))
@@ -166,7 +195,11 @@ def main():
     parser=argparse.ArgumentParser()
     parser.add_argument('--only', choices=['windows','android'])
     parser.add_argument('--unsigned', help='Use a CI-built unsigned Android APK and preserve the local release signer')
+    parser.add_argument('--ci-artifact', action='store_true', help='Download the checked CI artifact using the private local receipt')
     args=parser.parse_args()
+    if args.ci_artifact:
+        if args.only!='android' or args.unsigned: parser.error('--ci-artifact requires --only android and cannot be combined with --unsigned')
+        args.unsigned=ci_unsigned()
     BUILD.mkdir(exist_ok=True); OUT.mkdir(parents=True,exist_ok=True)
     if args.only!='android': icons()
     manifest=OUT/'checksums.json'

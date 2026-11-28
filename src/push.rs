@@ -18,6 +18,8 @@ struct Sender{key:RsaKeyPair,email:String,client:reqwest::Client,access:Mutex<Op
 struct Credential{project_id:String,client_email:String,private_key:String,#[serde(rename="type")]kind:String}
 #[derive(Deserialize)]
 pub struct Device{installation_id:Uuid,platform:String,token:String}
+#[derive(Deserialize)]
+pub struct Refresh{token:String}
 fn now()->u64{SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs()}
 fn credential(value:&str)->Result<(Credential,RsaKeyPair),&'static str>{
     let config:Credential=serde_json::from_str(value).map_err(|_|"invalid service-account JSON")?;
@@ -32,7 +34,18 @@ fn credential(value:&str)->Result<(Credential,RsaKeyPair),&'static str>{
 fn valid_token(token:&str)->bool{(20..=4096).contains(&token.len())&&token.bytes().all(|c|c.is_ascii_alphanumeric()||b"_:.-".contains(&c))}
 
 pub async fn config()->Json<serde_json::Value>{
-    Json(serde_json::json!({"enabled":SENDER.get().is_some(),"project_id":PROJECT,"vapid_key":std::env::var("RETONE_FIREBASE_VAPID_PUBLIC_KEY").unwrap_or_default(),"android_version_code":3}))
+    let raw=std::env::var("RETONE_FIREBASE_VAPID_PUBLIC_KEY").unwrap_or_default();
+    let public=URL_SAFE_NO_PAD.decode(&raw).ok().is_some_and(|bytes|bytes.len()==65&&bytes[0]==4);
+    Json(serde_json::json!({"enabled":SENDER.get().is_some(),"project_id":PROJECT,"vapid_key":if public{raw}else{String::new()},"android_version_code":3}))
+}
+pub async fn refresh(State(app):State<App>,Path(id):Path<Uuid>,headers:HeaderMap,Json(input):Json<Refresh>)->Result<StatusCode,StatusCode>{
+    let user=require_user(&app,&headers).await?;let session=session::token(&headers)?;
+    if !valid_token(&input.token){return Err(StatusCode::BAD_REQUEST);}
+    // Background token rotation can update only its existing session binding;
+    // it must not take an installation back from a newer signed-in account.
+    let changed=sqlx::query("UPDATE retone_v2.push_devices SET token=$4,updated_at=NOW() WHERE id=$1 AND user_id=$2 AND session_token=$3 AND platform='android'")
+        .bind(id).bind(user).bind(session).bind(input.token).execute(&app.db).await.map_err(|_|StatusCode::CONFLICT)?.rows_affected();
+    if changed==0{return Err(StatusCode::CONFLICT);}Ok(StatusCode::NO_CONTENT)
 }
 pub async fn register(State(app):State<App>,headers:HeaderMap,Json(input):Json<Device>)->Result<Json<serde_json::Value>,StatusCode>{
     let user=require_user(&app,&headers).await?;

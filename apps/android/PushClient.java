@@ -42,13 +42,14 @@ final class PushClient {
             @Override public void onComplete(Task<String> result){callback.complete(result.isSuccessful()?result.getResult():null,result.isSuccessful()?null:"token-unavailable");}
         });}catch(RuntimeException error){callback.complete(null,"push-unavailable");}
     }
-    static void bind(Context context,String user,boolean enabled){
+    static synchronized void bind(Context context,String user,boolean enabled){
         if(!enabled||!validUser(user)){user="";enabled=false;}
         SharedPreferences prefs=preferences(context);
         if(!user.equals(prefs.getString("user","")))manager(context).cancelAll();
         prefs.edit().putString("user",user).putBoolean("enabled",enabled).apply();
         try{FirebaseMessaging.getInstance().setAutoInitEnabled(enabled);}catch(RuntimeException ignored){}
     }
+    private static synchronized void invalidateIfBound(Context context,String user){if(user.equals(preferences(context).getString("user","")))bind(context,"",false);}
     private static boolean validUser(String user){try{return user!=null&&UUID.fromString(user).toString().equals(user);}catch(IllegalArgumentException error){return false;}}
     private static NotificationManager manager(Context context){return (NotificationManager)context.getSystemService(Context.NOTIFICATION_SERVICE);}
     static synchronized void show(Context context,String rawId,String user,String title,String body){
@@ -74,11 +75,11 @@ final class PushClient {
         try{
             String cookie=CookieManager.getInstance().getCookie(AppPolicy.ORIGIN);if(cookie==null||!cookie.contains("retone_session="))return;
             JSONObject input=new JSONObject();input.put("installation_id",installation(context));input.put("platform","android");input.put("token",token);
-            connection=(HttpURLConnection)new URL(AppPolicy.ORIGIN+"/api/push/devices").openConnection();connection.setConnectTimeout(8000);connection.setReadTimeout(8000);connection.setInstanceFollowRedirects(false);connection.setRequestMethod("POST");connection.setDoOutput(true);
+            connection=(HttpURLConnection)new URL(AppPolicy.ORIGIN+"/api/push/devices/"+installation(context)+"/token").openConnection();connection.setConnectTimeout(8000);connection.setReadTimeout(8000);connection.setInstanceFollowRedirects(false);connection.setRequestMethod("POST");connection.setDoOutput(true);
             connection.setRequestProperty("Content-Type","application/json");connection.setRequestProperty("Cookie",cookie);connection.setRequestProperty("X-ReTone-User",user);
             byte[] bytes=input.toString().getBytes(StandardCharsets.UTF_8);connection.setFixedLengthStreamingMode(bytes.length);
             try(OutputStream output=connection.getOutputStream()){output.write(bytes);}
-            int result=connection.getResponseCode();if(result==401||result==403)bind(context,"",false);
+            int result=connection.getResponseCode();if(result==401||result==403)invalidateIfBound(context,user);
         }catch(Exception ignored){/* Foreground enrollment retries the latest token. */}
         finally{if(connection!=null)connection.disconnect();}
     }
