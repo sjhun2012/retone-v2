@@ -935,6 +935,7 @@ async fn request_friend(
     if inserted==0{return Err(StatusCode::CONFLICT);}
     notifications::insert(&mut transaction,input.target_id,user_id,"friend_request",None).await?;
     transaction.commit().await.map_err(|_|StatusCode::INTERNAL_SERVER_ERROR)?;
+    push::wake();
     Ok(Json(serde_json::json!({"ok":true})))
 }
 async fn accept_friend(
@@ -966,6 +967,7 @@ async fn accept_friend(
     tx.commit()
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    push::wake();
     Ok(Json(serde_json::json!({"ok":true})))
 }
 async fn block_user(
@@ -2492,6 +2494,7 @@ async fn send(
             .bind(message_id).bind(image.mime).bind(image.bytes).execute(&mut *transaction).await.map_err(|_|StatusCode::INTERNAL_SERVER_ERROR)?;
     }
     transaction.commit().await.map_err(|_|StatusCode::INTERNAL_SERVER_ERROR)?;
+    push::wake();
     let unread: i64 = sqlx::query_scalar(
         "SELECT COUNT(*)::BIGINT FROM retone_v2.room_members WHERE room_id=$1 AND user_id<>$2",
     )
@@ -2743,6 +2746,7 @@ async fn add_room_members(
     }
     for invitee_id in added {notifications::insert(&mut transaction,invitee_id,inviter_id,"room_invite",Some(room_id)).await?;}
     transaction.commit().await.map_err(|_|StatusCode::INTERNAL_SERVER_ERROR)?;
+    push::wake();
     let members: i64 =
         sqlx::query_scalar("SELECT COUNT(*) FROM retone_v2.room_members WHERE room_id=$1")
             .bind(room_id)
@@ -2868,6 +2872,7 @@ async fn create_room(
     }
     for invitee in &invitees {notifications::insert(&mut transaction,Uuid::parse_str(invitee).map_err(|_|StatusCode::BAD_REQUEST)?,creator,"room_invite",Some(room_uuid)).await?;}
     transaction.commit().await.map_err(|_|StatusCode::INTERNAL_SERVER_ERROR)?;
+    push::wake();
     app.data.write().await.rooms.push(room.clone());
     Ok(Json(room))
 }

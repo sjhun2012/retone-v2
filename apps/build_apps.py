@@ -1,7 +1,7 @@
-"""Build the Windows installer and signed Android WebView app without Gradle.
+"""Build the Windows installer and sign the Firebase-enabled Android app.
 
 Requirements: Windows .NET Framework C# compiler; Python; JDK 21;
-Android SDK platform/build tools 36.0.0. Reuses local Maven cache if available.
+Android SDK platform/build tools 36.0.0; Gradle 8.13 (or a CI-built unsigned APK).
 Release signing material lives only in .local/ and MUST stay out of Git.
 """
 import argparse
@@ -137,7 +137,7 @@ def android(unsigned_input=None):
         run([java_home/'bin/keytool.exe', '-genkeypair', '-keystore', keystore, '-storetype', 'JKS', '-alias', signing['alias'],
              '-keyalg','RSA','-keysize','3072','-validity','10000','-storepass:env','RETONE_STORE_PASSWORD','-keypass:env','RETONE_STORE_PASSWORD',
              '-dname','CN=ReTone, OU=Application, O=ReTone, C=KR', '-noprompt'], env=environment)
-    target = OUT/'InstallRetone.apk'
+    target = work/'InstallRetone-candidate.apk'
     signer = [java, '-jar', tools/'lib/apksigner.jar']
     run([*signer, 'sign', '--v4-signing-enabled', 'false', '--ks', keystore, '--ks-key-alias', signing['alias'], '--ks-pass', 'env:RETONE_STORE_PASSWORD',
          '--key-pass','env:RETONE_STORE_PASSWORD','--out', target, aligned], env=environment)
@@ -145,6 +145,9 @@ def android(unsigned_input=None):
     import re
     digest = re.search(r'certificate SHA-256 digest: ([0-9a-f]+)', verified).group(1).upper()
     fingerprint = ':'.join(digest[i:i+2] for i in range(0,len(digest),2))
+    previous=json.loads((OUT/'checksums.json').read_text(encoding='utf-8')).get('android',{})
+    if previous.get('certificate_sha256') and previous['certificate_sha256']!=fingerprint:
+        raise RuntimeError('The signing certificate does not match the installed Re:tone app')
     links = [{'relation':['delegate_permission/common.handle_all_urls'], 'target':{'namespace':'android_app','package_name':'com.retone.app','sha256_cert_fingerprints':[fingerprint]}}]
     well_known = ROOT/'public/.well-known'; well_known.mkdir(parents=True, exist_ok=True)
     for name in ['assetlinks.json','digitalassetlinks.json']:
@@ -155,7 +158,8 @@ def android(unsigned_input=None):
     assert "package: name='com.retone.app'" in badging
     assert "targetSdkVersion:'36'" in badging
     assert "versionCode='3'" in badging and "versionName='1.2.0'" in badging
-    return {'file':target.name,'bytes':target.stat().st_size,'sha256':sha(target),'version':'1.2.0','version_code':3,'engine':'Android System WebView','package':'com.retone.app','certificate_sha256':fingerprint}
+    published=OUT/'InstallRetone.apk'; shutil.copyfile(target,published)
+    return {'file':published.name,'bytes':published.stat().st_size,'sha256':sha(published),'version':'1.2.0','version_code':3,'engine':'Android System WebView','package':'com.retone.app','certificate_sha256':fingerprint}
 
 
 def main():

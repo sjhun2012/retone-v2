@@ -11,6 +11,8 @@ use crate::{App,require_user,session};
 const PROJECT:&str="retone-push-sjhun-20261128";
 const ORIGIN:&str="https://retone-v2-mygr.onrender.com";
 static SENDER:OnceLock<Sender>=OnceLock::new();
+static SIGNAL:tokio::sync::Notify=tokio::sync::Notify::const_new();
+pub fn wake(){SIGNAL.notify_one();}
 struct Sender{key:RsaKeyPair,email:String,client:reqwest::Client,access:Mutex<Option<(String,u64)>>}
 #[derive(Deserialize)]
 struct Credential{project_id:String,client_email:String,private_key:String,#[serde(rename="type")]kind:String}
@@ -110,7 +112,23 @@ pub fn start(db:PgPool){
     let sender=Sender{key,email:credentials.client_email,client:reqwest::Client::builder().timeout(Duration::from_secs(15)).build().expect("FCM HTTP client"),access:Mutex::new(None)};
     if SENDER.set(sender).is_err(){return;}
     tokio::spawn(async move{
-        loop{match dispatch_one(&db).await{Ok(true)=>{},Ok(false)=>tokio::time::sleep(Duration::from_secs(2)).await,Err(_)=>{eprintln!("FCM queue temporarily unavailable");tokio::time::sleep(Duration::from_secs(10)).await;}}}
+        let mut cleaned=0;
+        loop{
+            if now().saturating_sub(cleaned)>3600{
+                let _=sqlx::query("DELETE FROM retone_v2.push_devices d WHERE NOT EXISTS(SELECT 1 FROM retone_v2.auth_sessions s WHERE s.token=d.session_token AND s.expires_at>NOW())").execute(&db).await;
+                let _=sqlx::query("DELETE FROM retone_v2.push_jobs WHERE completed_at<NOW()-INTERVAL '7 days'").execute(&db).await;
+                cleaned=now();
+            }
+            match dispatch_one(&db).await{
+                Ok(true)=>{},
+                Ok(false)=>{
+                    let due=sqlx::query_scalar::<_,Option<chrono::DateTime<chrono::Utc>>>("SELECT MIN(GREATEST(next_attempt,COALESCE(locked_until,next_attempt))) FROM retone_v2.push_jobs WHERE completed_at IS NULL").fetch_one(&db).await.ok().flatten();
+                    let wait=due.map(|date|(date.timestamp_millis()-chrono::Utc::now().timestamp_millis()).clamp(1000,600000) as u64).unwrap_or(600000);
+                    tokio::select!{_=SIGNAL.notified()=>{},_=tokio::time::sleep(Duration::from_millis(wait))=>{}}
+                },
+                Err(_)=>{eprintln!("FCM queue temporarily unavailable");tokio::time::sleep(Duration::from_secs(10)).await;}
+            }
+        }
     });
 }
 async fn dispatch_one(db:&PgPool)->Result<bool,sqlx::Error>{
