@@ -1,0 +1,29 @@
+'use strict';
+const assert=require('node:assert/strict'),{randomUUID}=require('node:crypto'),{execFileSync}=require('node:child_process');
+exports.prepare=async({request,alice,bob})=>{
+  const a=randomUUID(),b=randomUUID();
+  const register=(session,id,token)=>request('/api/push/devices',{session,method:'POST',body:{installation_id:id,platform:'android',token}});
+  await request('/api/push/status',{expected:401});
+  await request('/api/push/devices',{method:'POST',body:{installation_id:a,platform:'android',token:'a'.repeat(60)},expected:401});
+  await request('/api/push/devices',{session:alice,method:'POST',body:{installation_id:a,platform:'wrong',token:'a'.repeat(60)},expected:400});
+  await request('/api/push/devices',{session:alice,method:'POST',body:{installation_id:a,platform:'android',token:'bad'},expected:400});
+  const enrolled=(await register(alice,a,'a'.repeat(60))).value;assert.equal(enrolled.registered,true);assert.equal(enrolled.user_id,alice.id);assert.ok(!JSON.stringify(enrolled).includes('a'.repeat(60)));
+  await register(bob,b,'b'.repeat(60));
+  await request('/api/push/devices/'+a,{session:bob,method:'DELETE',expected:204});
+  assert.equal((await request('/api/push/status',{session:alice})).value.registered_devices,1);
+  await register(bob,a,'c'.repeat(60));assert.equal((await request('/api/push/status',{session:alice})).value.registered_devices,0);
+  await register(alice,a,'d'.repeat(60));assert.equal((await request('/api/push/status',{session:bob})).value.registered_devices,1);
+  return{a,b};
+};
+exports.finish=async({request,alice,bob,devices})=>{
+  assert.ok(/^postgres(?:ql)?:\/\//.test(process.env.DATABASE_URL||''));
+  for(const id of [alice.id,bob.id,devices.a,devices.b])assert.match(id,/^[a-f0-9-]{36}$/);
+  const sql=query=>execFileSync('psql',[process.env.DATABASE_URL,'-At','-v','ON_ERROR_STOP=1','-c',query],{encoding:'utf8'}).trim();
+  assert.ok(Number(sql('SELECT COUNT(*) FROM retone_v2.push_jobs'))>=3,'social events must create durable jobs in the same transaction');
+  assert.equal(sql('SELECT COUNT(*) FROM retone_v2.push_jobs j JOIN retone_v2.push_devices d ON d.id=j.device_id JOIN retone_v2.user_notifications n ON n.id=j.notification_id WHERE d.user_id<>n.recipient_id'),'0');
+  assert.equal(sql("SELECT COUNT(*) FROM retone_v2.push_devices WHERE id='"+devices.a+"'"),'0','logout must revoke the session device through its foreign key');
+  assert.equal((await request('/api/push/status',{session:bob})).value.registered_devices,1);
+  await request('/api/auth/logout',{session:bob,method:'POST',expected:204});
+  assert.equal(sql("SELECT COUNT(*) FROM retone_v2.push_devices WHERE id='"+devices.b+"'"),'0');
+  console.log('Push API passed: authenticated enrollment, private tokens, recipient-scoped revocation, account rebinding, durable social-event jobs and logout cascades.');
+};

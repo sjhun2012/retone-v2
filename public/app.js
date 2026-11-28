@@ -670,6 +670,7 @@ async function toggleBrowserNotifications(render = true) {
     if (permission !== "granted") alert("기기의 Re:tone 알림 권한을 허용해야 알림을 받을 수 있어요.");
   }
   window.retoneNotifications?.refresh();
+  window.retonePush?.sync(true);
   if (render) settings();
 }
 function notifyNewMessage(message) {

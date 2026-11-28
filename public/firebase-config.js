@@ -1,0 +1,2 @@
+/* Public Firebase web client configuration. No server credentials. */
+self.RETONE_FIREBASE_CONFIG={"projectId": "retone-push-sjhun-20261128", "appId": "1:4697163954:web:9938266aecb0246e0b61ab", "storageBucket": "retone-push-sjhun-20261128.firebasestorage.app", "apiKey": "AIzaSyDpZD-PvZyX2AAQ_PW_8CWIgC9ATPqRjtw", "authDomain": "retone-push-sjhun-20261128.firebaseapp.com", "messagingSenderId": "4697163954", "projectNumber": "4697163954", "version": "2"};

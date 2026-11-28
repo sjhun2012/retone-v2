@@ -1,0 +1,35 @@
+plugins { id 'com.android.application' }
+
+def nativeRoot = rootProject.file('../android')
+def generatedRoot = layout.buildDirectory.dir('generated/retone').get().asFile
+def prepareRetone = tasks.register('prepareRetone') {
+    inputs.file(new File(nativeRoot, 'AndroidManifest.xml'))
+    inputs.file(rootProject.file('../../public/firebase-client.json'))
+    inputs.file(rootProject.file('../THIRD_PARTY_LICENSES.txt'))
+    outputs.dir(generatedRoot)
+    doLast {
+        generatedRoot.mkdirs()
+        new File(generatedRoot, 'AndroidManifest.xml').text = new File(nativeRoot, 'AndroidManifest.xml').getText('UTF-8').replace(' package="com.retone.app"', '')
+        def assets = new File(generatedRoot, 'assets'); assets.mkdirs()
+        new File(assets, 'firebase-client.json').bytes = rootProject.file('../../public/firebase-client.json').bytes
+        new File(assets, 'THIRD_PARTY_LICENSES.txt').bytes = rootProject.file('../THIRD_PARTY_LICENSES.txt').bytes
+    }
+}
+android {
+    namespace 'com.retone.app'
+    compileSdk 36
+    buildToolsVersion '36.0.0'
+    defaultConfig { applicationId 'com.retone.app'; minSdk 26; targetSdk 36; versionCode 3; versionName '1.2.0' }
+    sourceSets {
+        main {
+            java.srcDirs = [nativeRoot]
+            res.srcDirs = [new File(nativeRoot, 'res')]
+            assets.srcDirs = [new File(nativeRoot, 'assets'), new File(generatedRoot, 'assets')]
+            manifest.srcFile new File(generatedRoot, 'AndroidManifest.xml')
+        }
+    }
+    compileOptions { sourceCompatibility JavaVersion.VERSION_1_8; targetCompatibility JavaVersion.VERSION_1_8 }
+    buildTypes { release { minifyEnabled true; proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), new File(nativeRoot, 'shrink-rules.pro') } }
+}
+tasks.named('preBuild').configure { dependsOn prepareRetone }
+dependencies { implementation 'com.google.firebase:firebase-messaging:25.1.0' }

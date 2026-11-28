@@ -27,8 +27,9 @@ pub async fn insert(transaction:&mut Transaction<'_,Postgres>,recipient:Uuid,act
         },
         _=>return Err(StatusCode::BAD_REQUEST),
     };
-    sqlx::query("INSERT INTO retone_v2.user_notifications(recipient_id,actor_id,kind,title,body,room_id) VALUES($1,$2,$3,$4,$5,$6)")
-        .bind(recipient).bind(actor).bind(kind).bind(title).bind(body).bind(room).execute(&mut **transaction).await.map_err(|_|StatusCode::INTERNAL_SERVER_ERROR)?;
+    let id:i64=sqlx::query_scalar("INSERT INTO retone_v2.user_notifications(recipient_id,actor_id,kind,title,body,room_id) VALUES($1,$2,$3,$4,$5,$6) RETURNING id")
+        .bind(recipient).bind(actor).bind(kind).bind(title).bind(body).bind(room).fetch_one(&mut **transaction).await.map_err(|_|StatusCode::INTERNAL_SERVER_ERROR)?;
+    crate::push::enqueue(transaction,id,recipient).await?;
     Ok(())
 }
 

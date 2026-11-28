@@ -3,3 +3,7 @@ build/
 *.jks
 *.keystore
 __pycache__/
+
+.gradle/
+apps/android-gradle/local.properties
+firebase-debug.log

@@ -42,7 +42,15 @@ final class NativeNotifications {
     }
     private void receive(String value){if(!AppPolicy.trusted(web.getUrl())||value==null||value.length()>5000)return;
         try{JSONObject data=new JSONObject(value);String action=data.optString("action");
-            if("permission".equals(action)){
+            if("push-token".equals(action)){
+                final String id=data.optString("id");if(id.length()>20||!"granted".equals(permission()))return;
+                final int current=generation;
+                PushClient.token(activity,new PushClient.Callback(){@Override public void complete(String token,String error){if(current!=generation)return;replyPush(id,token,error);}});
+            }else if("push-installation".equals(action)){
+                String id=data.optString("id");if(id.length()<=20)replyPush(id,null,null);
+            }else if("push-bind".equals(action)){
+                PushClient.bind(activity,data.optString("user"),data.optBoolean("enabled",false));
+            }else if("permission".equals(action)){
                 String id=data.optString("id");if(id.length()>20)return;
                 if(Build.VERSION.SDK_INT>=33&&activity.checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS)!=PackageManager.PERMISSION_GRANTED){
                     if(replyId!=null)return;replyId=id;activity.getPreferences(0).edit().putBoolean("notice-asked",true).apply();activity.requestPermissions(new String[]{Manifest.permission.POST_NOTIFICATIONS},REQUEST);
@@ -51,10 +59,13 @@ final class NativeNotifications {
                 String title=data.optString("title","Re:tone"),body=data.optString("body"),tag=data.optString("tag","retone");
                 if(title.length()>120||body.length()>3000||tag.length()>200)return;
                 PendingIntent launch=PendingIntent.getActivity(activity,0,new Intent(activity,MainActivity.class),PendingIntent.FLAG_UPDATE_CURRENT|PendingIntent.FLAG_IMMUTABLE);
-                Notification notice=new Notification.Builder(activity,"retone-chat").setSmallIcon(android.R.drawable.ic_dialog_email).setContentTitle(title).setContentText(body).setStyle(new Notification.BigTextStyle().bigText(body)).setAutoCancel(true).setContentIntent(launch).build();
+                Notification notice=new Notification.Builder(activity,"retone-chat").setSmallIcon(android.R.drawable.ic_dialog_email).setContentTitle(title).setContentText(body).setStyle(new Notification.BigTextStyle().bigText(body)).setAutoCancel(true).setOnlyAlertOnce(true).setContentIntent(launch).build();
                 manager().notify(tag,0,notice);
             }
         }catch(Exception ignored){}
+    }
+    private void replyPush(String id,String token,String error){if(port==null||!AppPolicy.trusted(web.getUrl()))return;
+        try{JSONObject value=new JSONObject(),push=new JSONObject();value.put("id",id);push.put("installation_id",PushClient.installation(activity));if(token!=null)push.put("token",token);if(error!=null)push.put("error",error);value.put("push",push);port.postMessage(new WebMessage(value.toString()));}catch(Exception ignored){}
     }
     private void reply(String id){if(port==null||!AppPolicy.trusted(web.getUrl()))return;try{JSONObject data=new JSONObject();data.put("id",id);data.put("permission",permission());port.postMessage(new WebMessage(data.toString()));}catch(Exception ignored){}}
     void permissionsResult(int request){if(request==REQUEST&&replyId!=null){String id=replyId;replyId=null;reply(id);}}

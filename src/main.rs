@@ -3,6 +3,7 @@ mod session;
 mod sources;
 mod media;
 mod notifications;
+mod push;
 use argon2::{Argon2, PasswordHash, PasswordHasher, PasswordVerifier};
 use axum::{
     Json, Router,
@@ -3326,6 +3327,7 @@ async fn prepare_storage() -> Option<PgPool> {
     }
     ensure_friend_codes(&pool).await.ok()?;
     sqlx::raw_sql(include_str!("../migrations/0002_images_notifications.sql")).execute(&pool).await.ok()?;
+    sqlx::raw_sql(include_str!("../migrations/0003_push.sql")).execute(&pool).await.ok()?;
     Some(pool)
 }
 async fn restore_data(db: &PgPool) -> Data {
@@ -3368,6 +3370,7 @@ async fn restore_data(db: &PgPool) -> Data {
 #[tokio::main]
 async fn main() {
     let db = prepare_storage().await.expect("DATABASE_URL is required");
+    push::start(db.clone());
     let restored = restore_data(&db).await;
     let app_state = App {
         db,
@@ -3433,6 +3436,10 @@ async fn main() {
         .route("/api/rooms/{id}/messages", get(messages).post(send).layer(DefaultBodyLimit::max(12*1024*1024)))
         .route("/api/rooms/{room}/messages/{message}/image",get(media::image))
         .route("/api/notifications",get(notifications::list))
+        .route("/api/push/config",get(push::config))
+        .route("/api/push/status",get(push::status))
+        .route("/api/push/devices",post(push::register))
+        .route("/api/push/devices/{id}",delete(push::remove))
         .route("/api/notifications/read",post(notifications::mark_read))
         .route("/api/notifications/{id}",get(notifications::one))
         .route("/api/rooms/{id}/leave", delete(leave_room))
