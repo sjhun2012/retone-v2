@@ -55,6 +55,8 @@ public final class MainActivity extends Activity {
         openIntent(getIntent());
     }
     private void openIntent(Intent intent){
+        long notice=intent.getLongExtra("retone_notice_id",0);
+        if(notice>0&&notice<=9007199254740991L){web.loadUrl(HOME+"&notice="+notice);return;}
         Uri data=intent.getData();
         if(data==null){if(web.getUrl()==null)web.loadUrl(HOME);return;}
         String code=AppPolicy.friendCode(data.toString());
@@ -66,7 +68,7 @@ public final class MainActivity extends Activity {
         WebSettings settings=web.getSettings();settings.setJavaScriptEnabled(true);settings.setDomStorageEnabled(true);
         settings.setAllowFileAccess(false);settings.setAllowContentAccess(true);settings.setMixedContentMode(WebSettings.MIXED_CONTENT_NEVER_ALLOW);
         settings.setCacheMode(WebSettings.LOAD_NO_CACHE);settings.setMediaPlaybackRequiresUserGesture(false);
-        settings.setUserAgentString(settings.getUserAgentString()+" ReToneApp/1.1");
+        settings.setUserAgentString(settings.getUserAgentString()+" ReToneApp/1.2");
         CookieManager.getInstance().setAcceptCookie(true);CookieManager.getInstance().setAcceptThirdPartyCookies(web,false);
         web.setWebViewClient(new WebViewClient(){
             @Override public boolean shouldOverrideUrlLoading(WebView view,WebResourceRequest request){

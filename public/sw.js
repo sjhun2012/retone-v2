@@ -29,3 +29,22 @@ self.addEventListener('notificationclick',event=>{
     return self.clients.openWindow('/?notice='+id);
   }));
 });
+
+// Data-only FCM messages are displayed only after checking the current cookie's
+// recipient. A logged-out browser or a different account must never see names.
+self.retoneHandlePush=async payload=>{
+  const data=payload?.data||{},id=Number(data.notice_id),user=data.user_id;
+  if(!Number.isSafeInteger(id)||id<=0||!/^[a-f0-9-]{36}$/i.test(user||''))return;
+  try{
+    const response=await fetch('/api/notifications/'+id,{credentials:'same-origin',cache:'no-store',headers:{'X-ReTone-User':user},signal:AbortSignal.timeout(10000)});
+    if(!response.ok)return;
+    const notice=await response.json();if(notice.read||notice.id!==id)return;
+    await self.registration.showNotification(notice.title,{body:notice.body,tag:'retone-event-'+id,icon:'/icons/app-192.png',data:{id,url:'/?notice='+id}});
+  }catch{}
+};
+try{
+  importScripts('/firebase-config.js');
+  importScripts('https://www.gstatic.com/firebasejs/12.19.0/firebase-app-compat.js','https://www.gstatic.com/firebasejs/12.19.0/firebase-messaging-compat.js');
+  firebase.initializeApp(self.RETONE_FIREBASE_CONFIG);
+  firebase.messaging().onBackgroundMessage(self.retoneHandlePush);
+}catch{/* Offline navigation still works when the SDK cannot be loaded. */}

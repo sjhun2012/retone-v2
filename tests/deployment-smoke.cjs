@@ -26,6 +26,7 @@ async function main() {
     assert.ok(out.cookie?.startsWith('retone_session='));
     return {...out.value.user,cookie:out.cookie};
   }));
+  const devices=await require('./push-api.cjs').prepare({request,alice,bob});
   assert.equal((await request('/api/auth/me',{session:alice})).value.id,alice.id);
   const identity=(await request('/api/friends/me',{session:alice})).value;
   assert.match(identity.friend_code,/^[A-Z0-9]{6}$/);
@@ -54,6 +55,7 @@ async function main() {
   await request('/api/auth/logout',{session:alice,method:'POST',expected:204});
   await request('/api/auth/me',{session:alice,expected:401});
   assert.ok((await request('/api/auth/login',{method:'POST',body:credentials[0]})).cookie);
+  await require('./push-api.cjs').finish({request,alice,bob,devices});
   console.log('Deployment smoke passed: migration, auth, real QR URL decoding, friendship, chat, typing, schedule approval, logout and login.');
 }
 main().catch(error=>{console.error(error);process.exitCode=1});

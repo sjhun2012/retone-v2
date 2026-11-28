@@ -12,10 +12,10 @@
   },
   "android": {
     "file": "InstallRetone.apk",
-    "bytes": 62072,
-    "sha256": "98ee2e3571cac4aad16415a04531999cf4af2506b437ba2070ba9a2a8884bcc7",
-    "version": "1.1.0",
-    "version_code": 2,
+    "bytes": 869502,
+    "sha256": "3f0bfb9ca698646a6493b8fd2f7f16a97390d77827afb43d2bd39813f1f90038",
+    "version": "1.2.0",
+    "version_code": 3,
     "engine": "Android System WebView",
     "package": "com.retone.app",
     "certificate_sha256": "E9:77:CB:7F:0C:E1:B9:09:64:40:90:AB:8D:E4:84:A9:FC:63:90:44:4D:95:7C:45:16:0D:E4:61:6C:A4:31:92"

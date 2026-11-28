@@ -8,8 +8,6 @@ Friend requests, acceptance and room invitations create durable recipient-specif
 
 The running app polls this independent notification stream even while a chat room is open. Desktop uses standard system notifications or service-worker notifications; the Android app uses its existing private native-notification bridge. Users must enable device notifications. The notification center provides history, read state and navigation to the friend or room. Cursor storage is scoped by account, and account changes invalidate outstanding results.
 
-## Closed-app push remains a separate dependency
+## Closed-app push integration
 
-The user explicitly requested notifications after the app is closed and authorized creating a new Re:tone Firebase project. Firebase has been added, but authenticated project access is not yet available in this execution session. Do not describe foreground polling as closed-app push.
-
-Completing closed-app delivery requires a Firebase project, Android/web app registration, FCM device-token registration, a least-privilege server sending credential, server outbox/retry delivery, a web push service worker and an Android Firebase messaging service. The current Android 1.1 package does not include the Firebase Messaging SDK. It must be updated once when that integration is ready. Preserve the existing package ID `com.retone.app` and release-signing certificate. Do not use a permanent background polling service as a substitute or add paid Cloud Functions/hosting without authorization.
+Firebase project and Android/web registrations are complete. The transport, authenticated device enrollment, durable retry queue, web service worker and Android Firebase messaging service are implemented in the push integration. See `push-notifications.md` for private server configuration and Android 1.2 release steps. Do not describe running-app polling or a build-only check as successful closed-app delivery. The original Android 1.1 package still requires its one-time native update.

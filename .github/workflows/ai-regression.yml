@@ -50,6 +50,9 @@ jobs:
           node --check public/sw.js
           node --check public/photo-upload.js
           node --check public/app-notifications.js
+          node --check public/app-push.js
+          node tests/firebase-setup.cjs
+          node --test tests/push-worker.cjs
           node --check public/friend-link.js
           node --check apps/android/assets/native-notifications.js
           node --test tests/installable-apps.cjs
@@ -59,6 +62,7 @@ jobs:
           NODE_PATH="$RUNNER_TEMP/retone-frontend/node_modules" node tests/frontend-regressions.cjs
           NODE_PATH="$RUNNER_TEMP/retone-frontend/node_modules" node tests/invite-flows.cjs
           NODE_PATH="$RUNNER_TEMP/retone-frontend/node_modules" node tests/photos-notifications.cjs
+          NODE_PATH="$RUNNER_TEMP/retone-frontend/node_modules" node tests/push-client.cjs
       - name: Check server against existing database schema
         run: |
           git show 251243e00effd021db33bc403b0ca14702dd52c5:migrations/0001_retone_v2.sql > "$RUNNER_TEMP/previous-schema.sql"
@@ -75,5 +79,7 @@ jobs:
             cat "$RUNNER_TEMP/retone-server.log"
             exit 1
           fi
+      - name: Check actual FCM worker against local OAuth and delivery mocks
+        run: node tests/push-delivery.cjs
 
 

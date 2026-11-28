@@ -3,6 +3,7 @@ mod session;
 mod sources;
 mod media;
 mod notifications;
+mod push;
 use argon2::{Argon2, PasswordHash, PasswordHasher, PasswordVerifier};
 use axum::{
     Json, Router,
@@ -934,6 +935,7 @@ async fn request_friend(
     if inserted==0{return Err(StatusCode::CONFLICT);}
     notifications::insert(&mut transaction,input.target_id,user_id,"friend_request",None).await?;
     transaction.commit().await.map_err(|_|StatusCode::INTERNAL_SERVER_ERROR)?;
+    push::wake();
     Ok(Json(serde_json::json!({"ok":true})))
 }
 async fn accept_friend(
@@ -965,6 +967,7 @@ async fn accept_friend(
     tx.commit()
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    push::wake();
     Ok(Json(serde_json::json!({"ok":true})))
 }
 async fn block_user(
@@ -2491,6 +2494,7 @@ async fn send(
             .bind(message_id).bind(image.mime).bind(image.bytes).execute(&mut *transaction).await.map_err(|_|StatusCode::INTERNAL_SERVER_ERROR)?;
     }
     transaction.commit().await.map_err(|_|StatusCode::INTERNAL_SERVER_ERROR)?;
+    push::wake();
     let unread: i64 = sqlx::query_scalar(
         "SELECT COUNT(*)::BIGINT FROM retone_v2.room_members WHERE room_id=$1 AND user_id<>$2",
     )
@@ -2742,6 +2746,7 @@ async fn add_room_members(
     }
     for invitee_id in added {notifications::insert(&mut transaction,invitee_id,inviter_id,"room_invite",Some(room_id)).await?;}
     transaction.commit().await.map_err(|_|StatusCode::INTERNAL_SERVER_ERROR)?;
+    push::wake();
     let members: i64 =
         sqlx::query_scalar("SELECT COUNT(*) FROM retone_v2.room_members WHERE room_id=$1")
             .bind(room_id)
@@ -2867,6 +2872,7 @@ async fn create_room(
     }
     for invitee in &invitees {notifications::insert(&mut transaction,Uuid::parse_str(invitee).map_err(|_|StatusCode::BAD_REQUEST)?,creator,"room_invite",Some(room_uuid)).await?;}
     transaction.commit().await.map_err(|_|StatusCode::INTERNAL_SERVER_ERROR)?;
+    push::wake();
     app.data.write().await.rooms.push(room.clone());
     Ok(Json(room))
 }
@@ -3326,6 +3332,7 @@ async fn prepare_storage() -> Option<PgPool> {
     }
     ensure_friend_codes(&pool).await.ok()?;
     sqlx::raw_sql(include_str!("../migrations/0002_images_notifications.sql")).execute(&pool).await.ok()?;
+    sqlx::raw_sql(include_str!("../migrations/0003_push.sql")).execute(&pool).await.ok()?;
     Some(pool)
 }
 async fn restore_data(db: &PgPool) -> Data {
@@ -3368,6 +3375,7 @@ async fn restore_data(db: &PgPool) -> Data {
 #[tokio::main]
 async fn main() {
     let db = prepare_storage().await.expect("DATABASE_URL is required");
+    push::start(db.clone());
     let restored = restore_data(&db).await;
     let app_state = App {
         db,
@@ -3433,6 +3441,11 @@ async fn main() {
         .route("/api/rooms/{id}/messages", get(messages).post(send).layer(DefaultBodyLimit::max(12*1024*1024)))
         .route("/api/rooms/{room}/messages/{message}/image",get(media::image))
         .route("/api/notifications",get(notifications::list))
+        .route("/api/push/config",get(push::config))
+        .route("/api/push/status",get(push::status))
+        .route("/api/push/devices",post(push::register))
+        .route("/api/push/devices/{id}",delete(push::remove))
+        .route("/api/push/devices/{id}/token",post(push::refresh))
         .route("/api/notifications/read",post(notifications::mark_read))
         .route("/api/notifications/{id}",get(notifications::one))
         .route("/api/rooms/{id}/leave", delete(leave_room))

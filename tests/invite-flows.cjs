@@ -54,8 +54,8 @@ async function main(){
   await new Promise(resolve=>setTimeout(resolve,0));
   assert.equal(app.querySelectorAll('.retone-install-link').length,1);assert.equal(app.querySelector('#draft').value,'작성 중');
 
-  let listener;const sent=[];const window={addEventListener:(name,callback)=>{listener=callback;},removeEventListener(){}};
-  const install=vm.runInNewContext(read('apps/android/assets/native-notifications.js'),{window,Map,Promise,JSON});install('secret','default');
+  let listener;const sent=[];const window={addEventListener:(name,callback)=>{listener=callback;},removeEventListener(){},dispatchEvent(){}};
+  const install=vm.runInNewContext(read('apps/android/assets/native-notifications.js'),{window,Map,Promise,JSON,setTimeout,clearTimeout,Event:dom.window.Event});install('secret','default');
   const port={postMessage:value=>sent.push(JSON.parse(value))};listener({data:'forged',ports:[port]});assert.equal(window.Notification,undefined);
   listener({data:'secret',ports:[port]});const permission=window.Notification.requestPermission();assert.equal(window.Notification.requestPermission(),permission);
   assert.equal(sent[0].action,'permission');port.onmessage({data:JSON.stringify({id:sent[0].id,permission:'granted'})});assert.equal(await permission,'granted');
