@@ -27,7 +27,7 @@ pub async fn insert(transaction:&mut Transaction<'_,Postgres>,recipient:Uuid,act
         },
         _=>return Err(StatusCode::BAD_REQUEST),
     };
-    let id:i64=sqlx::query_scalar("INSERT INTO retone_v2.user_notifications(recipient_id,actor_id,kind,title,body,room_id) VALUES($1,$2,$3,$4,$5,$6) RETURNING id")
+    let id:i64=sqlx::query_scalar("INSERT INTO retone_v2.user_notifications(recipient_id,actor_id,kind,title,body,room_id,alerts_suppressed) VALUES($1,$2,$3,$4,$5,$6,EXISTS(SELECT 1 FROM retone_v2.room_members rm WHERE rm.room_id=$6 AND rm.user_id=$1 AND rm.notifications_muted)) RETURNING id")
         .bind(recipient).bind(actor).bind(kind).bind(title).bind(body).bind(room).fetch_one(&mut **transaction).await.map_err(|_|StatusCode::INTERNAL_SERVER_ERROR)?;
     crate::push::enqueue(transaction,id,recipient).await?;
     Ok(())
@@ -40,7 +40,7 @@ pub async fn list(State(app):State<App>,headers:HeaderMap,Query(query):Query<Cur
         .bind(user).fetch_one(&app.db).await.map_err(|_|StatusCode::INTERNAL_SERVER_ERROR)?;
     if query.since==Some(-1){return Ok(Json(serde_json::json!({"notifications":[],"cursor":cursor,"unread":unread})));}
     let history=query.since.is_none();
-    let sql=format!("SELECT n.id,n.kind,n.title,n.body,n.room_id,FLOOR(EXTRACT(EPOCH FROM n.created_at)*1000)::BIGINT,n.read_at IS NOT NULL,EXISTS(SELECT 1 FROM retone_v2.room_members rm WHERE rm.room_id=n.room_id AND rm.user_id=n.recipient_id AND rm.notifications_muted) FROM retone_v2.user_notifications n WHERE n.recipient_id=$1 AND n.id>$2 AND NOT EXISTS(SELECT 1 FROM retone_v2.blocks b WHERE (b.blocker_id=$1 AND b.blocked_id=n.actor_id) OR (b.blocker_id=n.actor_id AND b.blocked_id=$1)) ORDER BY n.id {} LIMIT 100",if history{"DESC"}else{"ASC"});
+    let sql=format!("SELECT n.id,n.kind,n.title,n.body,n.room_id,FLOOR(EXTRACT(EPOCH FROM n.created_at)*1000)::BIGINT,n.read_at IS NOT NULL,n.alerts_suppressed OR EXISTS(SELECT 1 FROM retone_v2.room_members rm WHERE rm.room_id=n.room_id AND rm.user_id=n.recipient_id AND rm.notifications_muted) FROM retone_v2.user_notifications n WHERE n.recipient_id=$1 AND n.id>$2 AND NOT EXISTS(SELECT 1 FROM retone_v2.blocks b WHERE (b.blocker_id=$1 AND b.blocked_id=n.actor_id) OR (b.blocker_id=n.actor_id AND b.blocked_id=$1)) ORDER BY n.id {} LIMIT 100",if history{"DESC"}else{"ASC"});
     let rows=sqlx::query_as::<_,(i64,String,String,String,Option<Uuid>,i64,bool,bool)>(&sql)
         .bind(user).bind(query.since.unwrap_or(0)).fetch_all(&app.db).await.map_err(|_|StatusCode::INTERNAL_SERVER_ERROR)?;
     let notices:Vec<Notice>=rows.into_iter().map(|(id,kind,title,body,room_id,created,read,muted)|Notice{id,kind,title,body,room_id,created,read,muted}).collect();
@@ -58,7 +58,7 @@ pub async fn mark_read(State(app):State<App>,headers:HeaderMap,Json(input):Json<
 
 pub async fn one(State(app):State<App>,headers:HeaderMap,Path(id):Path<i64>)->Result<Json<Notice>,StatusCode>{
     let user=require_user(&app,&headers).await?;
-    let (id,kind,title,body,room_id,created,read,muted)=sqlx::query_as::<_,(i64,String,String,String,Option<Uuid>,i64,bool,bool)>("SELECT n.id,n.kind,n.title,n.body,n.room_id,FLOOR(EXTRACT(EPOCH FROM n.created_at)*1000)::BIGINT,n.read_at IS NOT NULL,EXISTS(SELECT 1 FROM retone_v2.room_members rm WHERE rm.room_id=n.room_id AND rm.user_id=n.recipient_id AND rm.notifications_muted) FROM retone_v2.user_notifications n WHERE n.recipient_id=$1 AND n.id=$2 AND NOT EXISTS(SELECT 1 FROM retone_v2.blocks b WHERE (b.blocker_id=$1 AND b.blocked_id=n.actor_id) OR (b.blocker_id=n.actor_id AND b.blocked_id=$1))")
+    let (id,kind,title,body,room_id,created,read,muted)=sqlx::query_as::<_,(i64,String,String,String,Option<Uuid>,i64,bool,bool)>("SELECT n.id,n.kind,n.title,n.body,n.room_id,FLOOR(EXTRACT(EPOCH FROM n.created_at)*1000)::BIGINT,n.read_at IS NOT NULL,n.alerts_suppressed OR EXISTS(SELECT 1 FROM retone_v2.room_members rm WHERE rm.room_id=n.room_id AND rm.user_id=n.recipient_id AND rm.notifications_muted) FROM retone_v2.user_notifications n WHERE n.recipient_id=$1 AND n.id=$2 AND NOT EXISTS(SELECT 1 FROM retone_v2.blocks b WHERE (b.blocker_id=$1 AND b.blocked_id=n.actor_id) OR (b.blocker_id=n.actor_id AND b.blocked_id=$1))")
         .bind(user).bind(id).fetch_optional(&app.db).await.map_err(|_|StatusCode::INTERNAL_SERVER_ERROR)?.ok_or(StatusCode::NOT_FOUND)?;
     Ok(Json(Notice{id,kind,title,body,room_id,created,read,muted}))
 }

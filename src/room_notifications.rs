@@ -24,6 +24,8 @@ pub(super) async fn set_preference(
         .bind(room).bind(user).bind(input.notifications_muted).execute(&mut *tx).await.map_err(|_|StatusCode::INTERNAL_SERVER_ERROR)?.rows_affected();
     if changed == 0 { return Err(StatusCode::FORBIDDEN); }
     if input.notifications_muted {
+        sqlx::query("UPDATE retone_v2.user_notifications SET alerts_suppressed=TRUE WHERE recipient_id=$1 AND room_id=$2")
+            .bind(user).bind(room).execute(&mut *tx).await.map_err(|_|StatusCode::INTERNAL_SERVER_ERROR)?;
         // Previously queued alerts must not reappear when the room is unmuted.
         sqlx::query("UPDATE retone_v2.push_jobs j SET completed_at=NOW(),locked_until=NULL,outcome='room-muted' FROM retone_v2.user_notifications n WHERE n.id=j.notification_id AND n.recipient_id=$1 AND n.room_id=$2 AND j.completed_at IS NULL")
             .bind(user).bind(room).execute(&mut *tx).await.map_err(|_|StatusCode::INTERNAL_SERVER_ERROR)?;

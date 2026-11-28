@@ -20,6 +20,7 @@ module.exports=async({request,alice,bob,room})=>{
   assert.equal((await request('/api/notifications?since=0',{session:bob})).value.notifications.find(n=>n.kind==='friend_request').muted,false);
   await request(endpoint,{session:alice,method:'PATCH',body:{notifications_muted:false}});
   await request(endpoint,{session:bob,method:'PATCH',body:{notifications_muted:false}});
+  assert.equal((await request('/api/notifications/'+invite.id,{session:bob})).value.muted,true,'unmute must not make an old muted alert eligible again');
   assert.ok(!(await request('/api/bootstrap',{session:alice})).value.muted_rooms.includes(room.id));
   console.log('Room notification API passed: membership checks, persistence across sessions, recipient isolation, room notice suppression and unmute.');
 };
