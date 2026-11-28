@@ -11,7 +11,7 @@
     if(!user||payload.data?.user_id!==user||!optedIn()||!Number.isSafeInteger(id)||id<=0)return;
     try{
       const notice=await api('/api/notifications/'+id);
-      if(user!==current()||notice.read||!optedIn())return;
+      if(user!==current()||notice.read||notice.muted||!optedIn())return;
       await window.retoneNotifications?.show(notice.title,{body:notice.body,tag:'retone-event-'+id,icon:'/icons/app-192.png',data:{id,url:'/?notice='+id}});
       window.retoneNotifications?.refresh();
     }catch{}

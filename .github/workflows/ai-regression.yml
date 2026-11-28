@@ -63,6 +63,7 @@ jobs:
           NODE_PATH="$RUNNER_TEMP/retone-frontend/node_modules" node tests/invite-flows.cjs
           NODE_PATH="$RUNNER_TEMP/retone-frontend/node_modules" node tests/photos-notifications.cjs
           NODE_PATH="$RUNNER_TEMP/retone-frontend/node_modules" node tests/push-client.cjs
+          NODE_PATH="$RUNNER_TEMP/retone-frontend/node_modules" node tests/room-mute.cjs
       - name: Check server against existing database schema
         run: |
           git show 251243e00effd021db33bc403b0ca14702dd52c5:migrations/0001_retone_v2.sql > "$RUNNER_TEMP/previous-schema.sql"

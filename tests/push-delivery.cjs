@@ -56,6 +56,22 @@ async function main(){
     await until(()=>received.filter(item=>item.data.notice_id===String(retryId)).length===2);
     await until(()=>sql('SELECT outcome FROM retone_v2.push_jobs WHERE notification_id='+retryId)==='sent');
 
+    // Muting a room cancels a durable retry without muting friend notifications.
+    failNext=true;
+    const muteBefore=new Set(received.map(item=>item.data.notice_id));
+    const mutedRoom=(await request('/api/rooms',{session:alice,method:'POST',body:{name:'Muted retry',invitee_ids:[bob.id]}})).value;
+    const mutedNotice=await until(()=>received.find(item=>item.token===b&&!muteBefore.has(item.data.notice_id)));
+    const mutedId=Number(mutedNotice.data.notice_id);
+    await until(()=>sql('SELECT outcome FROM retone_v2.push_jobs WHERE notification_id='+mutedId)==='retry');
+    await request('/api/rooms/'+mutedRoom.id+'/notifications',{session:bob,method:'PATCH',body:{notifications_muted:true}});
+    assert.equal(sql('SELECT outcome FROM retone_v2.push_jobs WHERE notification_id='+mutedId),'room-muted');
+    assert.equal((await request('/api/notifications/'+mutedId,{session:bob})).value.muted,true);
+    await request('/api/rooms/'+mutedRoom.id+'/notifications',{session:bob,method:'PATCH',body:{notifications_muted:false}});
+    await request('/api/rooms',{session:alice,method:'POST',body:{name:'Wake after unmute',invitee_ids:[]}});
+    await pause(150);
+    assert.equal(received.filter(item=>item.data.notice_id===String(mutedId)).length,1,'unmute must not replay old room alerts');
+    assert.equal((await request('/api/notifications/'+Number(first.data.notice_id),{session:bob})).value.muted,false);
+
     // A rejected FCM token must revoke only that device.
     invalidToken=c;await register(charlie,c);
     await request('/api/friends/request',{session:alice,method:'POST',body:{target_id:charlie.id}});

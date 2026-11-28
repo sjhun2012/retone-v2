@@ -29,10 +29,12 @@ pub(super) async fn sync(
         super::messages(State(app.clone()), Path(room.to_string()), headers).await?;
     let typing = sqlx::query_scalar::<_, String>("SELECT u.name FROM retone_v2.room_members m JOIN retone_v2.users u ON u.id=m.user_id WHERE m.room_id=$1 AND m.user_id<>$2 AND m.typing_until>NOW() ORDER BY u.name,u.id")
         .bind(room).bind(user).fetch_all(&app.db).await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let notifications_muted = sqlx::query_scalar::<_,bool>("SELECT notifications_muted FROM retone_v2.room_members WHERE room_id=$1 AND user_id=$2")
+        .bind(room).bind(user).fetch_one(&app.db).await.map_err(|_|StatusCode::INTERNAL_SERVER_ERROR)?;
     let data = app.data.read().await;
     let room = room.to_string();
     Ok(Json(
-        serde_json::json!({"messages":messages,"typing":typing,
+        serde_json::json!({"messages":messages,"typing":typing,"notifications_muted":notifications_muted,
         "appointments":data.appointments.iter().filter(|a|a.room_id==room).collect::<Vec<_>>(),
         "agreements":data.agreements.iter().filter(|a|a.room_id==room).collect::<Vec<_>>(),
         "reflections":data.reflections.iter().filter(|a|a.room_id==room).collect::<Vec<_>>(),

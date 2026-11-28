@@ -1,0 +1,26 @@
+const assert=require('node:assert/strict');
+module.exports=async({request,alice,bob,room})=>{
+  const endpoint='/api/rooms/'+room.id+'/notifications';
+  const saved=await request('/api/auth/signup',{method:'POST',body:{name:'Mute outsider',phone:'01099990004',password:'Testpass1!',ai_intervention:'off'}});
+  const outsider={...saved.value.user,cookie:saved.cookie};
+  await request(endpoint,{expected:401});
+  await request(endpoint,{session:outsider,expected:403});
+  await request(endpoint,{session:outsider,method:'PATCH',body:{notifications_muted:true,user_id:alice.id},expected:403});
+  await request(endpoint,{session:alice,method:'PATCH',body:{notifications_muted:'yes'},expected:422});
+  assert.equal((await request(endpoint,{session:alice})).value.notifications_muted,false);
+  await request(endpoint,{session:alice,method:'PATCH',body:{notifications_muted:true}});
+  assert.ok((await request('/api/bootstrap',{session:alice})).value.muted_rooms.includes(room.id));
+  assert.equal((await request('/api/rooms/'+room.id+'/sync',{session:alice})).value.notifications_muted,true);
+  assert.equal((await request(endpoint,{session:bob})).value.notifications_muted,false);
+  const login=await request('/api/auth/login',{method:'POST',body:{name:alice.name,phone:alice.phone||'01099990001',password:'Testpass1!'}});
+  assert.equal((await request(endpoint,{session:{cookie:login.cookie}})).value.notifications_muted,true,'another device/session must see the saved preference');
+  const invite=(await request('/api/notifications?since=0',{session:bob})).value.notifications.find(n=>n.room_id===room.id);
+  await request(endpoint,{session:bob,method:'PATCH',body:{notifications_muted:true}});
+  assert.equal((await request('/api/notifications/'+invite.id,{session:bob})).value.muted,true);
+  assert.equal((await request('/api/notifications?since=0',{session:bob})).value.notifications.find(n=>n.kind==='friend_request').muted,false);
+  await request(endpoint,{session:alice,method:'PATCH',body:{notifications_muted:false}});
+  await request(endpoint,{session:bob,method:'PATCH',body:{notifications_muted:false}});
+  assert.equal((await request('/api/notifications/'+invite.id,{session:bob})).value.muted,true,'unmute must not make an old muted alert eligible again');
+  assert.ok(!(await request('/api/bootstrap',{session:alice})).value.muted_rooms.includes(room.id));
+  console.log('Room notification API passed: membership checks, persistence across sessions, recipient isolation, room notice suppression and unmute.');
+};

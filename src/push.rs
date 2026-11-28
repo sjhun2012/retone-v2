@@ -76,7 +76,7 @@ pub async fn status(State(app):State<App>,headers:HeaderMap)->Result<Json<serde_
     Ok(Json(serde_json::json!({"registered_devices":count,"delivery_enabled":SENDER.get().is_some()})))
 }
 pub async fn enqueue(tx:&mut Transaction<'_,Postgres>,notice:i64,user:Uuid)->Result<(),StatusCode>{
-    sqlx::query("INSERT INTO retone_v2.push_jobs(notification_id,device_id) SELECT $1,d.id FROM retone_v2.push_devices d JOIN retone_v2.auth_sessions s ON s.token=d.session_token WHERE d.user_id=$2 AND s.expires_at>NOW() ON CONFLICT DO NOTHING")
+    sqlx::query("INSERT INTO retone_v2.push_jobs(notification_id,device_id) SELECT $1,d.id FROM retone_v2.push_devices d JOIN retone_v2.auth_sessions s ON s.token=d.session_token WHERE d.user_id=$2 AND s.expires_at>NOW() AND NOT EXISTS(SELECT 1 FROM retone_v2.user_notifications n JOIN retone_v2.room_members rm ON rm.room_id=n.room_id AND rm.user_id=n.recipient_id WHERE n.id=$1 AND rm.notifications_muted) ON CONFLICT DO NOTHING")
         .bind(notice).bind(user).execute(&mut **tx).await.map_err(|_|StatusCode::INTERNAL_SERVER_ERROR)?;
     Ok(())
 }
@@ -158,7 +158,7 @@ async fn dispatch_one(db:&PgPool)->Result<bool,sqlx::Error>{
     let claimed=sqlx::query_as::<_,(i64,Uuid,i32)>("UPDATE retone_v2.push_jobs SET locked_until=NOW()+INTERVAL '60 seconds',attempts=attempts+1 WHERE (notification_id,device_id) IN(SELECT notification_id,device_id FROM retone_v2.push_jobs WHERE completed_at IS NULL AND next_attempt<=NOW() AND (locked_until IS NULL OR locked_until<NOW()) ORDER BY next_attempt,notification_id LIMIT 1 FOR UPDATE SKIP LOCKED) RETURNING notification_id,device_id,attempts")
         .fetch_optional(db).await?;
     let Some((id,device,attempts))=claimed else{return Ok(false);};
-    let record=sqlx::query_as::<_,(String,String,Uuid,String,String)>("SELECT d.token,d.platform,d.user_id,n.title,n.body FROM retone_v2.push_devices d JOIN retone_v2.auth_sessions s ON s.token=d.session_token JOIN retone_v2.users u ON u.id=d.user_id JOIN retone_v2.user_notifications n ON n.id=$1 AND n.recipient_id=d.user_id WHERE d.id=$2 AND s.user_id=d.user_id AND s.expires_at>NOW() AND u.deleted_at IS NULL AND n.read_at IS NULL AND n.created_at>NOW()-INTERVAL '24 hours' AND NOT EXISTS(SELECT 1 FROM retone_v2.blocks b WHERE (b.blocker_id=d.user_id AND b.blocked_id=n.actor_id) OR (b.blocker_id=n.actor_id AND b.blocked_id=d.user_id))")
+    let record=sqlx::query_as::<_,(String,String,Uuid,String,String)>("SELECT d.token,d.platform,d.user_id,n.title,n.body FROM retone_v2.push_devices d JOIN retone_v2.auth_sessions s ON s.token=d.session_token JOIN retone_v2.users u ON u.id=d.user_id JOIN retone_v2.user_notifications n ON n.id=$1 AND n.recipient_id=d.user_id WHERE d.id=$2 AND EXISTS(SELECT 1 FROM retone_v2.push_jobs j WHERE j.notification_id=n.id AND j.device_id=d.id AND j.completed_at IS NULL) AND s.user_id=d.user_id AND s.expires_at>NOW() AND u.deleted_at IS NULL AND n.read_at IS NULL AND NOT n.alerts_suppressed AND n.created_at>NOW()-INTERVAL '24 hours' AND NOT EXISTS(SELECT 1 FROM retone_v2.room_members rm WHERE rm.room_id=n.room_id AND rm.user_id=n.recipient_id AND rm.notifications_muted) AND NOT EXISTS(SELECT 1 FROM retone_v2.blocks b WHERE (b.blocker_id=d.user_id AND b.blocked_id=n.actor_id) OR (b.blocker_id=n.actor_id AND b.blocked_id=d.user_id))")
         .bind(id).bind(device).fetch_optional(db).await?;
     let delivery=if let Some((token,platform,user,title,body))=record{SENDER.get().expect("FCM sender").send(&token,&platform,id,user,&title,&body).await}else{Delivery::Failed};
     match delivery{

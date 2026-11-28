@@ -10,7 +10,7 @@ async function request(path, {session, method='GET', body, expected=200} = {}) {
   });
   assert.equal(response.status, expected, method + ' ' + path);
   const text = await response.text();
-  const value = text ? JSON.parse(text) : null;
+  const value = text ? (response.headers.get('content-type')?.includes('json') ? JSON.parse(text) : text) : null;
   return {value, cookie:response.headers.get('set-cookie')?.split(';')[0]};
 }
 async function main() {
@@ -37,6 +37,7 @@ async function main() {
   await request('/api/friends/accept',{session:bob,method:'POST',body:{target_id:alice.id}});
   const room=(await request('/api/rooms',{session:alice,method:'POST',
     body:{name:'Combined deployment smoke',direct:true,invitee_ids:[bob.id]}})).value;
+  await require('./room-notifications-api.cjs')({request,alice,bob,room});
   await require('./media-events-api.cjs')({base,request,alice,bob,room});
   const message=(await request('/api/rooms/'+room.id+'/messages',{session:alice,method:'POST',
     body:{body:'Hello from the combined release'}})).value;
